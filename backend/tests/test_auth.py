@@ -24,6 +24,7 @@ from app.repositories.database import Database
 from app.repositories.models import (
     AuthSession,
     Base,
+    LoginAttempt,
     MembershipPlan,
     OutboxEvent,
     PointAccount,
@@ -392,3 +393,68 @@ async def test_create_admin_cli_is_one_time_and_assigns_system_roles(tmp_path, m
     second_passwords = iter(["another secure password", "another secure password"])
     monkeypatch.setattr(cli.getpass, "getpass", lambda _: next(second_passwords))
     assert await cli.create_admin() == 3
+
+
+@pytest.mark.asyncio
+async def test_reset_admin_password_cli_unlocks_account_and_revokes_sessions(
+    auth_context: AuthContext, monkeypatch
+) -> None:
+    user = await seed_user(
+        auth_context,
+        email="locked-owner@example.com",
+        password="original secure password",
+        super_admin=True,
+    )
+    async with client_for(auth_context) as client:
+        successful = await client.post(
+            "/api/v1/auth/login",
+            json={"identifier": user.email, "password": "original secure password"},
+        )
+        assert successful.status_code == 200
+        for _ in range(2):
+            failed = await client.post(
+                "/api/v1/auth/login",
+                json={"identifier": user.email, "password": "wrong password"},
+            )
+            assert failed.status_code == 401
+
+        monkeypatch.setattr(cli, "get_settings", lambda: auth_context.service.settings)
+        monkeypatch.setattr("builtins.input", lambda _: user.email)
+        passwords = iter(["replacement secure password", "replacement secure password"])
+        monkeypatch.setattr(cli.getpass, "getpass", lambda _: next(passwords))
+        assert await cli.reset_admin_password() == 0
+
+        recovered = await client.post(
+            "/api/v1/auth/login",
+            json={"identifier": user.email, "password": "replacement secure password"},
+        )
+        assert recovered.status_code == 200
+
+    async with auth_context.database.session_factory() as session:
+        stored = await session.get(User, user.id)
+        attempts = list(
+            (
+                await session.scalars(
+                    select(LoginAttempt).where(
+                        LoginAttempt.account_fingerprint
+                        == auth_context.service.fingerprint(user.email)
+                    )
+                )
+            ).all()
+        )
+        revoked_sessions = list(
+            (
+                await session.scalars(
+                    select(AuthSession).where(
+                        AuthSession.user_id == user.id,
+                        AuthSession.revoke_reason == "password_reset_by_cli",
+                    )
+                )
+            ).all()
+        )
+        assert stored is not None
+        assert stored.status == "active"
+        assert stored.locked_until is None
+        assert stored.session_version == 2
+        assert all(attempt.success for attempt in attempts)
+        assert len(revoked_sessions) == 1

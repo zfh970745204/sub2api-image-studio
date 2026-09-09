@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import validate_email, validate_password
@@ -17,7 +17,7 @@ from app.domain.ids import uuid7
 from app.migrations.local_results import migrate_local_results
 from app.object_storage import build_object_storage
 from app.repositories.database import Database
-from app.repositories.models import Role, User, UserRole
+from app.repositories.models import LoginAttempt, Role, User, UserRole
 from app.services.auth import AuthService
 from app.services.memberships import EntitlementService, sync_builtin_membership_plans
 from app.services.points import PointService
@@ -124,6 +124,74 @@ async def create_admin() -> int:
         await database.dispose()
 
 
+async def reset_admin_password() -> int:
+    settings = get_settings()
+    service = AuthService(settings)
+    database = Database(
+        settings.database_url,
+        timeout_seconds=settings.dependency_timeout_seconds,
+    )
+    try:
+        email = validate_email(input("管理员邮箱: "))
+        password = getpass.getpass("新密码（12-128 个字符）: ")
+        confirmation = getpass.getpass("再次输入新密码: ")
+        if password != confirmation:
+            print("两次输入的密码不一致。", file=sys.stderr)
+            return 2
+        validate_password(password)
+
+        async with database.session_factory() as session:
+            statement = (
+                select(User)
+                .join(UserRole, UserRole.user_id == User.id)
+                .join(Role, Role.id == UserRole.role_id)
+                .where(
+                    User.email == email,
+                    User.deleted_at.is_(None),
+                    Role.code == "super_admin",
+                )
+                .with_for_update()
+            )
+            user = (await session.execute(statement)).scalar_one_or_none()
+            if user is None:
+                print("未找到有效的超级管理员账户。", file=sys.stderr)
+                return 3
+            if user.status not in {"active", "locked"}:
+                print("超级管理员账户已被停用，不能通过该命令重新启用。", file=sys.stderr)
+                return 4
+
+            user.password_hash = service.hash_password(password)
+            user.status = "active"
+            user.locked_until = None
+            user.session_version += 1
+            await service.revoke_user_sessions(
+                session,
+                user=user,
+                reason="password_reset_by_cli",
+            )
+            account_fingerprint = service.fingerprint(service.normalize_identifier(email))
+            await session.execute(
+                delete(LoginAttempt).where(LoginAttempt.account_fingerprint == account_fingerprint)
+            )
+            service.record_audit(
+                session,
+                action="super_admin.password_reset_by_cli",
+                aggregate_type="user",
+                aggregate_id=user.id,
+                actor_user_id=None,
+                subject_user_id=user.id,
+                request_id=f"cli-{uuid7().hex}",
+            )
+            await session.commit()
+        print(f"已重设超级管理员密码并解除锁定：{email}")
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    finally:
+        await database.dispose()
+
+
 async def migrate_results(
     *,
     owner_id: uuid.UUID,
@@ -174,6 +242,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("create-admin", help="交互式创建首个超级管理员")
+    subparsers.add_parser("reset-admin-password", help="交互式重设超级管理员密码并解除登录锁定")
     migration = subparsers.add_parser(
         "migrate-local-results", help="迁移旧 SQLite 素材及本地结果到 R2"
     )
@@ -184,6 +253,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "create-admin":
         return asyncio.run(create_admin())
+    if args.command == "reset-admin-password":
+        return asyncio.run(reset_admin_password())
     if args.command == "migrate-local-results":
         return asyncio.run(
             migrate_results(
