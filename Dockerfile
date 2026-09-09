@@ -16,7 +16,7 @@ RUN python -m pip install --no-cache-dir --constraint backend/constraints.lock .
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /app app \
-    && mkdir -p /app/backend/data /models \
+    && mkdir -p /app/backend/data/results /app/backend/data/tmp /models \
     && chown -R app:app /app/backend/data /models
 USER app
 EXPOSE 8000

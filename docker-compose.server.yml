@@ -1,0 +1,171 @@
+x-app-environment: &app-environment
+  APP_ENV: production
+  APP_VERSION: ${APP_VERSION:-0.13.0}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+  REDIS_URL: redis://redis:6379/0
+  APP_CONFIG_MASTER_KEY: ${APP_CONFIG_MASTER_KEY:?Set APP_CONFIG_MASTER_KEY in .env}
+  DEPENDENCY_CHECKS_ENABLED: "true"
+  LEGACY_SYNC_API_ENABLED: "false"
+  AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER:?Set AUTH_TOKEN_PEPPER in .env}
+  AUTH_HASH_SALT: ${AUTH_HASH_SALT:?Set AUTH_HASH_SALT in .env}
+  SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-sub2image_session}
+  SESSION_COOKIE_SECURE: "true"
+  PUBLIC_APP_URL: ${PUBLIC_APP_URL:?Set PUBLIC_APP_URL in .env}
+  AUTH_SESSION_TTL_DAYS: ${AUTH_SESSION_TTL_DAYS:-30}
+  LOGIN_ATTEMPT_WINDOW_MINUTES: ${LOGIN_ATTEMPT_WINDOW_MINUTES:-15}
+  LOGIN_ACCOUNT_FAILURE_LIMIT: ${LOGIN_ACCOUNT_FAILURE_LIMIT:-5}
+  LOGIN_IP_FAILURE_LIMIT: ${LOGIN_IP_FAILURE_LIMIT:-25}
+  LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
+  PASSWORD_RESET_TTL_MINUTES: ${PASSWORD_RESET_TTL_MINUTES:-30}
+  POINT_ADJUSTMENT_APPROVAL_THRESHOLD: ${POINT_ADJUSTMENT_APPROVAL_THRESHOLD:-1000}
+  JOB_QUOTE_TTL_SECONDS: ${JOB_QUOTE_TTL_SECONDS:-300}
+  WORKER_MAX_JOBS: "1"
+  WORKER_JOB_TIMEOUT_SECONDS: ${WORKER_JOB_TIMEOUT_SECONDS:-600}
+  ASSET_DELETE_GRACE_DAYS: ${ASSET_DELETE_GRACE_DAYS:-7}
+  ASSET_ORPHAN_GRACE_HOURS: ${ASSET_ORPHAN_GRACE_HOURS:-24}
+  SCHEDULER_QUEUE_NAME: scheduler
+  RESULT_DIR: /app/backend/data/results
+  DATABASE_PATH: /app/backend/data/legacy-studio.db
+  BACKGROUND_MODEL_DIR: /models
+  TMPDIR: /app/backend/data/tmp
+
+x-app-service: &app-service
+  image: ghcr.io/zfh970745204/sub2api-image-studio:${IMAGE_TAG:-latest}
+  environment: *app-environment
+  networks:
+    - backend
+  init: true
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  redis:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "128mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+    mem_limit: 192m
+    cpus: "0.25"
+    pids_limit: 100
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  migrate:
+    <<: *app-service
+    command: ["python", "-m", "alembic", "-c", "backend/alembic.ini", "upgrade", "head"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: "0.50"
+    pids_limit: 150
+    restart: "no"
+
+  web:
+    <<: *app-service
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--app-dir",
+        "backend",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--proxy-headers",
+        "--forwarded-allow-ips=*",
+      ]
+    ports:
+      - "127.0.0.1:${APP_HTTP_PORT:-18080}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime-data:/app/backend/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
+    cpus: "0.50"
+    pids_limit: 200
+
+  worker:
+    <<: *app-service
+    command: ["python", "-m", "arq", "app.workers.worker.WorkerSettings"]
+    working_dir: /app/backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime-data:/app/backend/data
+      - model-cache:/models
+    mem_limit: 1280m
+    cpus: "1.50"
+    pids_limit: 300
+    stop_grace_period: 15m
+
+  scheduler:
+    <<: *app-service
+    command: ["python", "-m", "arq", "app.workers.scheduler.SchedulerSettings"]
+    working_dir: /app/backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - runtime-data:/app/backend/data
+    mem_limit: 192m
+    cpus: "0.25"
+    pids_limit: 150
+    stop_grace_period: 2m
+
+networks:
+  backend:
+
+volumes:
+  redis-data:
+  runtime-data:
+  model-cache:
