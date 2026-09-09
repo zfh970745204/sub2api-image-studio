@@ -192,6 +192,91 @@ async def reset_admin_password() -> int:
         await database.dispose()
 
 
+async def change_admin_email() -> int:
+    settings = get_settings()
+    service = AuthService(settings)
+    database = Database(
+        settings.database_url,
+        timeout_seconds=settings.dependency_timeout_seconds,
+    )
+    try:
+        current_email = validate_email(input("当前管理员邮箱: "))
+        new_email = validate_email(input("新管理员邮箱: "))
+        confirmation = validate_email(input("再次输入新管理员邮箱: "))
+        if new_email != confirmation:
+            print("两次输入的新邮箱不一致。", file=sys.stderr)
+            return 2
+        if current_email == new_email:
+            print("新邮箱与当前邮箱相同，未做修改。", file=sys.stderr)
+            return 2
+
+        async with database.session_factory() as session:
+            statement = (
+                select(User)
+                .join(UserRole, UserRole.user_id == User.id)
+                .join(Role, Role.id == UserRole.role_id)
+                .where(
+                    User.email == current_email,
+                    User.deleted_at.is_(None),
+                    Role.code == "super_admin",
+                )
+                .with_for_update()
+            )
+            user = (await session.execute(statement)).scalar_one_or_none()
+            if user is None:
+                print("未找到有效的超级管理员账户。", file=sys.stderr)
+                return 3
+            duplicate = await session.scalar(
+                select(func.count(User.id)).where(
+                    User.email == new_email,
+                    User.id != user.id,
+                    User.deleted_at.is_(None),
+                )
+            )
+            if duplicate:
+                print("新邮箱已被其他账户使用。", file=sys.stderr)
+                return 4
+
+            user.email = new_email
+            user.email_verified_at = datetime.now(UTC)
+            user.session_version += 1
+            await service.revoke_user_sessions(
+                session,
+                user=user,
+                reason="email_changed_by_cli",
+            )
+            fingerprints = [
+                service.fingerprint(service.normalize_identifier(email))
+                for email in (current_email, new_email)
+            ]
+            await session.execute(
+                delete(LoginAttempt).where(LoginAttempt.account_fingerprint.in_(fingerprints))
+            )
+            service.record_audit(
+                session,
+                action="super_admin.email_changed_by_cli",
+                aggregate_type="user",
+                aggregate_id=user.id,
+                actor_user_id=None,
+                subject_user_id=user.id,
+                request_id=f"cli-{uuid7().hex}",
+                details={"email_changed": True},
+            )
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                print("新邮箱已被其他账户使用。", file=sys.stderr)
+                return 4
+        print(f"已修改超级管理员邮箱：{new_email}")
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    finally:
+        await database.dispose()
+
+
 async def migrate_results(
     *,
     owner_id: uuid.UUID,
@@ -243,6 +328,7 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("create-admin", help="交互式创建首个超级管理员")
     subparsers.add_parser("reset-admin-password", help="交互式重设超级管理员密码并解除登录锁定")
+    subparsers.add_parser("change-admin-email", help="交互式修正超级管理员邮箱")
     migration = subparsers.add_parser(
         "migrate-local-results", help="迁移旧 SQLite 素材及本地结果到 R2"
     )
@@ -255,6 +341,8 @@ def main() -> int:
         return asyncio.run(create_admin())
     if args.command == "reset-admin-password":
         return asyncio.run(reset_admin_password())
+    if args.command == "change-admin-email":
+        return asyncio.run(change_admin_email())
     if args.command == "migrate-local-results":
         return asyncio.run(
             migrate_results(

@@ -458,3 +458,51 @@ async def test_reset_admin_password_cli_unlocks_account_and_revokes_sessions(
         assert stored.session_version == 2
         assert all(attempt.success for attempt in attempts)
         assert len(revoked_sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_change_admin_email_cli_clears_attempts_and_revokes_sessions(
+    auth_context: AuthContext, monkeypatch
+) -> None:
+    user = await seed_user(
+        auth_context,
+        email="owner@gamil.example",
+        password="original secure password",
+        super_admin=True,
+    )
+    async with client_for(auth_context) as client:
+        successful = await client.post(
+            "/api/v1/auth/login",
+            json={"identifier": user.email, "password": "original secure password"},
+        )
+        assert successful.status_code == 200
+        failed = await client.post(
+            "/api/v1/auth/login",
+            json={"identifier": "owner@gmail.example", "password": "wrong password"},
+        )
+        assert failed.status_code == 401
+
+    monkeypatch.setattr(cli, "get_settings", lambda: auth_context.service.settings)
+    emails = iter(["owner@gamil.example", "owner@gmail.example", "owner@gmail.example"])
+    monkeypatch.setattr("builtins.input", lambda _: next(emails))
+    assert await cli.change_admin_email() == 0
+
+    async with auth_context.database.session_factory() as session:
+        stored = await session.get(User, user.id)
+        attempts = list((await session.scalars(select(LoginAttempt))).all())
+        revoked_sessions = list(
+            (
+                await session.scalars(
+                    select(AuthSession).where(
+                        AuthSession.user_id == user.id,
+                        AuthSession.revoke_reason == "email_changed_by_cli",
+                    )
+                )
+            ).all()
+        )
+        assert stored is not None
+        assert stored.email == "owner@gmail.example"
+        assert stored.email_verified_at is not None
+        assert stored.session_version == 2
+        assert attempts == []
+        assert len(revoked_sessions) == 1
