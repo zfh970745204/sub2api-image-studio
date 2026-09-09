@@ -1,0 +1,165 @@
+x-app-environment: &app-environment
+  APP_ENV: production
+  APP_VERSION: ${APP_VERSION:-0.13.0}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql+asyncpg://sub2image:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/sub2image
+  REDIS_URL: redis://redis:6379/0
+  APP_CONFIG_MASTER_KEY: ${APP_CONFIG_MASTER_KEY:?Set a base64 encoded 256-bit key in .env}
+  DEPENDENCY_CHECKS_ENABLED: "true"
+  LEGACY_SYNC_API_ENABLED: "false"
+  AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER:?Set AUTH_TOKEN_PEPPER in .env}
+  AUTH_HASH_SALT: ${AUTH_HASH_SALT:?Set AUTH_HASH_SALT in .env}
+  SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-sub2image_session}
+  SESSION_COOKIE_SECURE: "true"
+  PUBLIC_APP_URL: ${PUBLIC_APP_URL:?Set the public HTTPS URL in .env}
+  AUTH_SESSION_TTL_DAYS: ${AUTH_SESSION_TTL_DAYS:-30}
+  LOGIN_ATTEMPT_WINDOW_MINUTES: ${LOGIN_ATTEMPT_WINDOW_MINUTES:-15}
+  LOGIN_ACCOUNT_FAILURE_LIMIT: ${LOGIN_ACCOUNT_FAILURE_LIMIT:-5}
+  LOGIN_IP_FAILURE_LIMIT: ${LOGIN_IP_FAILURE_LIMIT:-25}
+  LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
+  PASSWORD_RESET_TTL_MINUTES: ${PASSWORD_RESET_TTL_MINUTES:-30}
+  POINT_ADJUSTMENT_APPROVAL_THRESHOLD: ${POINT_ADJUSTMENT_APPROVAL_THRESHOLD:-1000}
+  JOB_QUOTE_TTL_SECONDS: ${JOB_QUOTE_TTL_SECONDS:-300}
+  WORKER_MAX_JOBS: ${WORKER_MAX_JOBS:-2}
+  WORKER_JOB_TIMEOUT_SECONDS: ${WORKER_JOB_TIMEOUT_SECONDS:-600}
+  ASSET_DELETE_GRACE_DAYS: ${ASSET_DELETE_GRACE_DAYS:-7}
+  ASSET_ORPHAN_GRACE_HOURS: ${ASSET_ORPHAN_GRACE_HOURS:-24}
+  SCHEDULER_QUEUE_NAME: scheduler
+  RESULT_DIR: /tmp/sub2image-results
+  DATABASE_PATH: /tmp/legacy-studio.db
+  BACKGROUND_MODEL_DIR: /models
+
+x-app-service: &app-service
+  build: .
+  image: sub2image-studio:${APP_VERSION:-local}
+  environment: *app-environment
+  networks:
+    - backend
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sub2image
+      POSTGRES_USER: sub2image
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sub2image -d sub2image"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+    restart: unless-stopped
+
+  migrate:
+    <<: *app-service
+    command: ["python", "-m", "alembic", "-c", "backend/alembic.ini", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *app-service
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--app-dir",
+        "backend",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--proxy-headers",
+        "--forwarded-allow-ips=*",
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /tmp
+
+  worker:
+    <<: *app-service
+    command: ["python", "-m", "arq", "app.workers.worker.WorkerSettings"]
+    working_dir: /app/backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - model-cache:/models
+    stop_grace_period: 15m
+    tmpfs:
+      - /tmp
+
+  scheduler:
+    <<: *app-service
+    command: ["python", "-m", "arq", "app.workers.scheduler.SchedulerSettings"]
+    working_dir: /app/backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 2m
+    tmpfs:
+      - /tmp
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - edge
+      - backend
+    restart: unless-stopped
+
+networks:
+  edge:
+  backend:
+
+volumes:
+  postgres-data:
+  redis-data:
+  model-cache:

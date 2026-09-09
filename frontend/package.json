@@ -1,0 +1,28 @@
+{
+  "name": "sub2image-frontend",
+  "private": true,
+  "version": "0.13.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.app.json && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json --pretty false",
+    "test": "vitest run --coverage.enabled=false"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "jsdom": "^30.0.1",
+    "typescript": "latest",
+    "vitest": "^5.0.0"
+  }
+}
