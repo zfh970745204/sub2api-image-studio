@@ -46,3 +46,8 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+      - name: Mirror the Redis runtime to GHCR
+        run: |
+          docker pull redis:7-alpine
+          docker tag redis:7-alpine ghcr.io/${{ github.repository }}:redis-7-alpine
+          docker push ghcr.io/${{ github.repository }}:redis-7-alpine

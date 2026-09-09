@@ -47,7 +47,7 @@ x-app-service: &app-service
 
 services:
   redis:
-    image: redis:7-alpine
+    image: ghcr.io/zfh970745204/sub2api-image-studio:redis-7-alpine
     command:
       [
         "redis-server",
