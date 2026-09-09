@@ -10,7 +10,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY backend/ ./backend/
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgl1 libgomp1 \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir --constraint backend/constraints.lock ./backend
 COPY --from=frontend /app/frontend/dist ./frontend/dist

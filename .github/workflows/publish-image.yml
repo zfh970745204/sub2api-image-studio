@@ -46,6 +46,13 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+      - name: Smoke test production worker imports
+        run: >-
+          docker run --rm
+          ghcr.io/${{ github.repository }}:sha-${{ github.event.workflow_run.head_sha }}
+          python -c "import cv2; from app.workers.worker import WorkerSettings;
+          from app.workers.scheduler import SchedulerSettings;
+          print(WorkerSettings.queue_name, SchedulerSettings.queue_name)"
       - name: Mirror the Redis runtime to GHCR
         run: |
           docker pull redis:7-alpine
