@@ -4,10 +4,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$python = @(
+    (Join-Path $projectRoot ".venv/Scripts/python.exe"),
+    (Join-Path $projectRoot ".venv/bin/python")
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
-if (-not (Test-Path -LiteralPath $python)) {
-    throw "Python virtual environment not found at $python"
+if (-not $python) {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) {
+        $pythonCommand = Get-Command python3 -ErrorAction SilentlyContinue
+    }
+    if (-not $pythonCommand) {
+        throw "Python executable not found"
+    }
+    $python = $pythonCommand.Source
 }
 
 Push-Location $projectRoot
@@ -26,7 +36,7 @@ try {
     } finally {
         Pop-Location
     }
-    & $python scripts\check-coverage.py backend\coverage.json
+    & $python scripts/check-coverage.py backend/coverage.json
     if ($LASTEXITCODE -ne 0) { throw "core coverage gate failed" }
 
     & npm run typecheck --prefix frontend
