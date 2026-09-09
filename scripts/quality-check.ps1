@@ -27,6 +27,13 @@ try {
     & $python -m ruff format --check backend
     if ($LASTEXITCODE -ne 0) { throw "Ruff format check failed" }
 
+    & npm run typecheck --prefix frontend
+    if ($LASTEXITCODE -ne 0) { throw "frontend typecheck failed" }
+    & npm test --prefix frontend
+    if ($LASTEXITCODE -ne 0) { throw "frontend component tests failed" }
+    & npm run build --prefix frontend
+    if ($LASTEXITCODE -ne 0) { throw "frontend production build failed" }
+
     Push-Location backend
     try {
         & $python -m mypy
@@ -38,13 +45,6 @@ try {
     }
     & $python scripts/check-coverage.py backend/coverage.json
     if ($LASTEXITCODE -ne 0) { throw "core coverage gate failed" }
-
-    & npm run typecheck --prefix frontend
-    if ($LASTEXITCODE -ne 0) { throw "frontend typecheck failed" }
-    & npm test --prefix frontend
-    if ($LASTEXITCODE -ne 0) { throw "frontend component tests failed" }
-    & npm run build --prefix frontend
-    if ($LASTEXITCODE -ne 0) { throw "frontend production build failed" }
 
     if ($Integration) {
         Push-Location backend
