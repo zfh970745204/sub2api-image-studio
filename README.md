@@ -19,7 +19,7 @@ without downloading and uploading it again.
 - Reuse any recent source or result as the input to the next task
 - Private Cloudflare R2 assets with PostgreSQL ownership and version lineage
 - Versioned administrator configuration with AES-256-GCM encrypted service credentials
-- Permission-scoped `/admin` operations console with fact-table metrics, approval workflows,
+- Permission-scoped `/admin` operations console with direct configuration editors,
   redacted audit exports, saved views, and responsive data tables
 - Authenticated `/app` production workspace with quoted asynchronous tasks, private asset
   previews, job tracking, point ledger, membership entitlements, notifications, and device security
@@ -55,7 +55,7 @@ Copy `.env.example` to `.env`, replace `POSTGRES_PASSWORD`, generate independent
 and set the public HTTPS URL.
 The production stack requires TLS because session cookies are always `Secure`.
 Start the isolated production services, create the first administrator, then publish
-Sub2API and R2 configuration through the authenticated administrator API:
+Sub2API and R2 configuration in the administrator console:
 
 ```powershell
 docker compose up --build -d
@@ -80,6 +80,30 @@ docker compose exec web python -m app.cli create-admin
 
 This command accepts no password argument and refuses to create another bootstrap
 administrator after the first `super_admin` exists.
+
+管理员登录 `/admin` 后可直接进行以下配置，无需提交通用操作申请：
+
+| 配置内容 | 后台入口 | 保存效果 |
+| --- | --- | --- |
+| Sub2API、R2、邮件连接 | 系统配置 → 编辑配置 | 保存并生效；连接测试独立执行，密钥留空保留 |
+| 新用户赠送积分、默认套餐、全局上传和任务限制 | 系统配置 → 通用业务配置 | 保存后供后续业务读取 |
+| 图片操作开关、积分单价、超时和尝试次数 | 价格 → 编辑配置 | 一次保存；新价格用于后续报价 |
+| 会员等级、折扣、额度和保留天数 | 会员 → 新建套餐 / 编辑配置 | 可直接启用或停用；已有会员保留原权益快照 |
+| 给用户分配、变更或续期会员 | 用户 → 用户详情 → 分配 / 续期会员 | 立即执行；也可从会员页搜索用户 |
+| 人工赠送或扣减积分 | 积分 → 调整积分，或用户详情 → 调整积分 | 超级管理员直接入账，包括大额调整 |
+| 自定义角色和用户授权 | 角色权限 → 新建 / 编辑；用户详情 → 分配角色 | 保存后更新权限；内置角色定义固定 |
+
+普通财务管理员的大额积分调整仍受 `POINT_ADJUSTMENT_APPROVAL_THRESHOLD` 约束，
+在“积分 → 查看待处理的积分调整”处理。超级管理员可处理自己的历史待审积分调整。
+业务写入保留权限校验、审计与积分幂等保护；系统配置保存检查生效版本，防止覆盖他人的修改。
+
+目前“价格”指图片操作消耗的积分，会员套餐不包含现金售价或在线支付。
+周期自动赠送积分、公开注册和邮件自助找回密码尚未实现，不提供可开启的假入口。
+首次创建会员时使用通用配置中的默认套餐；月度/年度赠送一周期，到期回到 Free，不会自动续赠。
+修改套餐权益不会追溯更新已有会员；需要变更的用户应在用户详情变更套餐。
+
+本次后台编辑功能无需新增数据库迁移。源码部署需重新构建前端并更新 Web、Worker、Scheduler；
+使用 `docker-compose.server.yml` 的服务器需等包含改动的镜像发布后更新相应镜像标签并重新启动服务。
 
 For a memory-constrained server that uses Neon PostgreSQL, Cloudflare R2, and an
 existing host Nginx, use `docker-compose.server.yml` instead. Its application image

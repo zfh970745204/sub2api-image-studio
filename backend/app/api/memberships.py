@@ -48,6 +48,7 @@ def validate_entitlements(value: dict[str, Any] | None) -> dict[str, Any] | None
 
 
 class CreatePlanRequest(BaseModel):
+    status: Literal["draft", "active", "inactive"] = "draft"
     code: str = Field(min_length=2, max_length=64)
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=5000)
@@ -95,6 +96,7 @@ class CreatePlanRequest(BaseModel):
 
 
 class UpdatePlanRequest(BaseModel):
+    status: Literal["draft", "active", "inactive"] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=5000)
     level: int | None = Field(default=None, ge=0)
@@ -294,6 +296,8 @@ async def replace_entitlements(session, plan_id: uuid.UUID, entitlements: dict[s
 
 
 def validate_plan_definition(plan: MembershipPlan) -> None:
+    if plan.code == "free" and plan.status != "active":
+        raise ApiError(409, "DEFAULT_PLAN_REQUIRED", "Free 套餐不能停用")
     if plan.periodic_points != 0:
         raise ApiError(422, "PERIODIC_POINTS_DISABLED", "P0 不启用周期积分发放")
     if plan.code == "free" and plan.billing_period != "none":
@@ -391,7 +395,7 @@ async def create_plan(
             name=payload.name,
             description=payload.description,
             level=payload.level,
-            status="draft",
+            status=payload.status,
             billing_period=payload.billing_period,
             periodic_points=payload.periodic_points,
             operation_discount_bps=payload.operation_discount_bps,
@@ -447,6 +451,7 @@ async def update_plan(
     async with database.session_factory() as session:
         plan = await get_plan_or_404(session, plan_id, for_update=True)
         editable_fields = {
+            "status",
             "name",
             "description",
             "level",

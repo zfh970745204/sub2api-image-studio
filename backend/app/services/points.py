@@ -342,7 +342,7 @@ class PointService:
         requested_by: uuid.UUID,
         idempotency_key: str,
         request_fingerprint: str,
-        approval_threshold: int,
+        approval_threshold: int | None,
         request_id: str,
     ) -> PointAdjustmentRequest:
         if amount == 0:
@@ -376,7 +376,7 @@ class PointService:
             request_fingerprint=request_fingerprint,
         )
         session.add(adjustment)
-        if abs(amount) < approval_threshold:
+        if approval_threshold is None or abs(amount) < approval_threshold:
             transaction, _ = await self.apply_transaction(
                 session,
                 user_id=user_id,
@@ -424,6 +424,7 @@ class PointService:
         idempotency_key: str,
         review_fingerprint: str,
         request_id: str,
+        allow_self_review: bool = False,
     ) -> PointAdjustmentRequest:
         adjustment = (
             await session.scalars(
@@ -444,7 +445,7 @@ class PointService:
             return adjustment
         if adjustment.status != "pending":
             raise ApiError(409, "POINT_ADJUSTMENT_ALREADY_REVIEWED", "积分调整申请已处理")
-        if adjustment.requested_by == reviewed_by:
+        if adjustment.requested_by == reviewed_by and not allow_self_review:
             raise ApiError(409, "POINT_ADJUSTMENT_SELF_REVIEW", "申请人不能审核自己的调整")
         if decision not in {"approve", "reject"}:
             raise ValueError(f"unknown decision: {decision}")

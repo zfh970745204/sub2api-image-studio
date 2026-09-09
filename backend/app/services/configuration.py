@@ -526,6 +526,7 @@ class ConfigService:
         version_number: int,
         actor_user_id: uuid.UUID,
         request_id: str,
+        require_connection_test: bool = True,
     ) -> ConfigVersion:
         group = await self.group(session, code, lock=True)
         version = await self._version(session, group.id, version_number, lock=True)
@@ -537,12 +538,12 @@ class ConfigService:
             plan_exists = await session.scalar(
                 select(func.count(MembershipPlan.id)).where(
                     MembershipPlan.code == resolved.values["default_membership_code"],
-                    MembershipPlan.enabled.is_(True),
+                    MembershipPlan.status == "active",
                 )
             )
             if not plan_exists:
                 raise ApiError(409, "DEFAULT_MEMBERSHIP_NOT_FOUND", "默认会员等级不存在或未启用")
-        if code in SENSITIVE_GROUPS and bool(resolved.values.get("enabled")):
+        if require_connection_test and code in SENSITIVE_GROUPS and resolved.values.get("enabled"):
             succeeded = await session.scalar(
                 select(func.count(ConfigTestRun.id)).where(
                     ConfigTestRun.config_version_id == version.id,

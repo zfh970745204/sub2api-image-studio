@@ -97,6 +97,11 @@ class UpdateOperationRequest(BaseModel):
         return self
 
 
+class SaveOperationRequest(UpdateOperationRequest):
+    base_points: int = Field(strict=True, ge=0, le=1_000_000_000)
+    parameter_rules: dict[str, Any] = Field(default_factory=dict)
+
+
 class CreatePriceRequest(BaseModel):
     operation_code: str = Field(min_length=2, max_length=64)
     base_points: int = Field(strict=True, ge=0, le=1_000_000_000)
@@ -527,6 +532,46 @@ async def update_operation(
         await session.commit()
         await session.refresh(operation)
         price = await operation_with_price(session, operation, now=datetime.now(UTC))
+    return {"operation": operation_payload(operation, price)}
+
+
+@router.put("/api/v1/admin/operations/{code}/configuration")
+async def save_operation_configuration(
+    code: str,
+    payload: SaveOperationRequest,
+    request: Request,
+    principal: PricingManager,
+) -> dict[str, Any]:
+    database = request.app.state.runtime_services.database
+    async with database.session_factory() as session:
+        operation = await service.update_operation(
+            session,
+            code=code,
+            values=payload.model_dump(
+                exclude={"reason", "base_points", "parameter_rules"}, exclude_none=True
+            ),
+            actor_user_id=principal.user_id,
+            reason=payload.reason,
+            request_id=request_id(request),
+        )
+        price = await operation_with_price(session, operation, now=datetime.now(UTC))
+        if (
+            price is None
+            or price.base_points != payload.base_points
+            or price.parameter_rules != payload.parameter_rules
+        ):
+            price = await service.create_price(
+                session,
+                operation_code=code,
+                base_points=payload.base_points,
+                parameter_rules=payload.parameter_rules,
+                effective_from=None,
+                actor_user_id=principal.user_id,
+                reason=payload.reason,
+                request_id=request_id(request),
+            )
+        await session.commit()
+        await session.refresh(operation)
     return {"operation": operation_payload(operation, price)}
 
 

@@ -54,8 +54,14 @@ class CreateRoleRequest(BaseModel):
 
 
 class UpdateRoleRequest(BaseModel):
+    permission_codes: list[str] | None = Field(default=None, max_length=100)
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("permission_codes")
+    @classmethod
+    def validate_permissions(cls, value: list[str] | None) -> list[str] | None:
+        return validate_permission_codes(value) if value is not None else None
 
     @field_validator("name")
     @classmethod
@@ -296,6 +302,14 @@ async def update_role(
             role.name = payload.name
         if payload.description is not None:
             role.description = payload.description.strip()
+        if payload.permission_codes is not None:
+            selected_permissions = await resolve_permissions(session, payload.permission_codes)
+            await session.execute(delete(RolePermission).where(RolePermission.role_id == role.id))
+            session.add_all(
+                RolePermission(role_id=role.id, permission_id=permission.id)
+                for permission in selected_permissions
+            )
+            await bump_role_users(session, role.id)
         service.record_audit(
             session,
             action="role.updated",
@@ -304,6 +318,7 @@ async def update_role(
             actor_user_id=principal.user_id,
             subject_user_id=None,
             request_id=request_id,
+            details={"permission_codes": payload.permission_codes},
         )
         await session.commit()
         await session.refresh(role)

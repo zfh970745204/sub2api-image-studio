@@ -20,6 +20,7 @@ from app.repositories.models import (
 )
 from app.services.configuration import runtime_config_value
 from app.services.points import PointService
+from app.services.rbac import active_super_admin_ids
 
 router = APIRouter(tags=["points"])
 PointsOwner = Annotated[Principal, Depends(require_permission("points.read_own"))]
@@ -409,7 +410,11 @@ async def create_adjustment(
                 requested_by=principal.user_id,
                 idempotency_key=key,
                 request_fingerprint=fingerprint,
-                approval_threshold=request.app.state.settings.point_adjustment_approval_threshold,
+                approval_threshold=(
+                    None
+                    if principal.user_id in await active_super_admin_ids(session)
+                    else request.app.state.settings.point_adjustment_approval_threshold
+                ),
                 request_id=request_id(request),
             )
             await session.commit()
@@ -530,6 +535,7 @@ async def review_adjustment(
                 idempotency_key=key,
                 review_fingerprint=fingerprint,
                 request_id=request_id(request),
+                allow_self_review=principal.user_id in await active_super_admin_ids(session),
             )
             await session.commit()
         except IntegrityError as exc:

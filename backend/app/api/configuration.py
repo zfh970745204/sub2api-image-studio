@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import select
 
 from app.api.dependencies import Principal, require_permission
+from app.api.errors import ApiError
 from app.domain.ids import uuid7
 from app.repositories.models import ConfigGroup, ConfigTestRun
 from app.services.configuration import ConfigConnectionTester, ConfigService
@@ -63,6 +64,13 @@ class PatchDraftRequest(StrictRequest):
         return self
 
 
+class SaveConfigRequest(StrictRequest):
+    values: dict[str, Any]
+    secrets: dict[str, str] = Field(default_factory=dict)
+    base_version: int | None = Field(ge=1)
+    change_reason: str = Field(default="管理员保存配置", min_length=1, max_length=500)
+
+
 class ReasonRequest(StrictRequest):
     reason: str = Field(min_length=1, max_length=500)
     confirm_sensitive_change: bool = False
@@ -102,6 +110,7 @@ async def _group_payload(request: Request, group: ConfigGroup) -> dict[str, Any]
             "id": group.id,
             "code": group.code,
             "name": group.name,
+            "defaults": service.definition(group.code).model().model_dump(mode="json"),
             "active_version": group.active_version,
             "updated_at": group.updated_at,
             "active": await service.masked_version(session, group.code, active) if active else None,
@@ -166,6 +175,63 @@ async def create_config_draft(
         await session.commit()
         body = await service.masked_version(session, group_code, version)
     return {"version": body}
+
+
+@router.put("/{group_code}")
+async def save_config_group(
+    request: Request,
+    group_code: str,
+    payload: SaveConfigRequest,
+    principal: ConfigManager,
+) -> dict[str, Any]:
+    service = _service(request)
+    async with _runtime(request).database.session_factory() as session:
+        group = await service.group(session, group_code, lock=True)
+        if group.active_version != payload.base_version:
+            raise ApiError(409, "CONFIG_VERSION_CONFLICT", "配置已被其他管理员修改，请刷新后重试")
+        version = await service.create_draft(
+            session,
+            code=group_code,
+            actor_user_id=principal.user_id,
+            values=payload.values,
+            secrets=payload.secrets,
+            change_reason=payload.change_reason.strip() or "管理员保存配置",
+            confirmed=True,
+            request_id=_request_id(request),
+        )
+        version = await service.publish(
+            session,
+            code=group_code,
+            version_number=version.version,
+            actor_user_id=principal.user_id,
+            request_id=_request_id(request),
+            require_connection_test=False,
+        )
+        await session.commit()
+        body = await service.masked_version(session, group_code, version)
+    await _broadcast(request, group_code, version.version)
+    return {"version": body}
+
+
+@router.post("/{group_code}/test")
+async def test_active_config(
+    request: Request, group_code: str, principal: ConfigTester
+) -> dict[str, Any]:
+    service = _service(request)
+    async with _runtime(request).database.session_factory() as session:
+        group = await service.group(session, group_code)
+        if group.active_version is None:
+            raise ApiError(409, "CONFIG_NOT_SAVED", "请先保存配置，再测试连接")
+        resolved = await service.resolved(session, group_code)
+        tester = getattr(request.app.state, "config_connection_tester", None)
+        tester = tester or ConfigConnectionTester(request.app.state.settings)
+        outcome = await tester.test(resolved)
+        # Connection tests report health; they never gate saving configuration.
+    return {
+        "status": "succeeded" if outcome.succeeded else "failed",
+        "message": outcome.message,
+        "latency_ms": outcome.latency_ms,
+    }
 
 
 @router.patch("/{group_code}/drafts/{version_number}")

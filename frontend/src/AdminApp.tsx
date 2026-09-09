@@ -44,6 +44,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { apiRequest, ApiRequestError } from "./admin-api";
+import { AdminEditor, DirectActionDialog, PointAdjustments, type EditorKind } from "./AdminEditors";
 
 type Row = Record<string, unknown>;
 
@@ -108,41 +110,6 @@ interface ModuleDefinition {
   columns: Column[];
   filters?: Array<{ key: string; label: string; options: Array<[string, string]> }>;
   exportModule?: string;
-  riskAction?: {
-    actionType: string;
-    targetType: string;
-    label: string;
-    riskLevel: "high" | "critical";
-  };
-}
-
-class ApiRequestError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      message?: string;
-      detail?: string | { message?: string };
-    };
-    const detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message;
-    throw new ApiRequestError(response.status, payload.message || detail || `请求失败（${response.status}）`);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -248,12 +215,6 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
     permission: "users.read",
     managePermission: "users.manage",
     exportModule: "users",
-    riskAction: {
-      actionType: "user.disable",
-      targetType: "user",
-      label: "禁用账号",
-      riskLevel: "high",
-    },
     filters: [
       {
         key: "status",
@@ -277,17 +238,11 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
   },
   memberships: {
     title: "会员",
-    eyebrow: "套餐、权益与用户周期",
+    eyebrow: "编辑套餐权益、启停与用户会员分配",
     endpoint: "/api/v1/admin/membership-plans",
     permission: "memberships.read",
     managePermission: "memberships.manage",
     exportModule: "memberships",
-    riskAction: {
-      actionType: "membership.downgrade",
-      targetType: "membership_plan",
-      label: "立即降级",
-      riskLevel: "high",
-    },
     filters: [
       {
         key: "status",
@@ -304,7 +259,6 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
       { key: "code", label: "代码" },
       { key: "status", label: "状态", render: (row) => <StatusValue value={row.status} /> },
       { key: "billing_period", label: "周期" },
-      { key: "periodic_points", label: "周期积分" },
       {
         key: "operation_discount_bps",
         label: "计价比例",
@@ -320,12 +274,6 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
     permission: "points.read",
     managePermission: "points.adjust",
     exportModule: "points",
-    riskAction: {
-      actionType: "points.adjust",
-      targetType: "point_transaction",
-      label: "人工调整",
-      riskLevel: "high",
-    },
     filters: [
       {
         key: "entry_type",
@@ -361,12 +309,6 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
     permission: "pricing.read",
     managePermission: "pricing.manage",
     exportModule: "pricing",
-    riskAction: {
-      actionType: "pricing.change",
-      targetType: "operation",
-      label: "发布价格",
-      riskLevel: "high",
-    },
     columns: [
       { key: "name", label: "操作" },
       { key: "code", label: "代码" },
@@ -384,12 +326,6 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
     permission: "tasks.read",
     managePermission: "tasks.manage",
     exportModule: "jobs",
-    riskAction: {
-      actionType: "job.refund",
-      targetType: "image_job",
-      label: "强制退款",
-      riskLevel: "high",
-    },
     filters: [
       {
         key: "status",
@@ -423,12 +359,6 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
     permission: "assets.read",
     managePermission: "assets.manage",
     exportModule: "assets",
-    riskAction: {
-      actionType: "asset.quarantine",
-      targetType: "asset",
-      label: "隔离资产",
-      riskLevel: "high",
-    },
     filters: [
       {
         key: "status",
@@ -464,16 +394,10 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
   },
   settings: {
     title: "系统配置",
-    eyebrow: "连接状态、版本与发布历史",
+    eyebrow: "直接编辑、保存生效与连接测试",
     endpoint: "/api/v1/admin/config",
     permission: "config.read",
     managePermission: "config.manage",
-    riskAction: {
-      actionType: "config.publish",
-      targetType: "config_group",
-      label: "发布配置",
-      riskLevel: "critical",
-    },
     columns: [
       { key: "name", label: "配置组" },
       { key: "code", label: "代码" },
@@ -485,7 +409,7 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
       {
         key: "active.status",
         label: "生效状态",
-        render: (row) => <StatusValue value={nested(row, "active.status") || "pending"} />,
+        render: (row) => !row.active_version ? "尚未配置" : row.code === "general" ? "已生效" : nested(row, "active.values.enabled") ? "已启用" : "已停用",
       },
       {
         key: "latest_draft.status",
@@ -501,12 +425,6 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
     endpoint: "/api/v1/admin/roles",
     permission: "roles.read",
     managePermission: "roles.manage",
-    riskAction: {
-      actionType: "role.permissions_change",
-      targetType: "role",
-      label: "变更角色权限",
-      riskLevel: "critical",
-    },
     columns: [
       { key: "name", label: "角色" },
       { key: "code", label: "代码" },
@@ -671,6 +589,8 @@ function AdminApp() {
                 module={module}
                 definition={MODULES[module]}
                 permissions={permissions}
+                currentUserId={session.user.id}
+                superAdmin={session.user.roles?.includes("super_admin")}
               />
             )
           ) : (
@@ -984,7 +904,7 @@ function TableSkeleton() {
   return <div className="admin-table-skeleton">{Array.from({ length: 7 }, (_, index) => <span key={index} />)}</div>;
 }
 
-function ModuleTable({ module, definition, permissions, embedded = false }: { module: Exclude<ModuleId, "dashboard">; definition: ModuleDefinition; permissions: Set<string>; embedded?: boolean }) {
+function ModuleTable({ module, definition, permissions, embedded = false, currentUserId = "", superAdmin = false }: { module: Exclude<ModuleId, "dashboard">; definition: ModuleDefinition; permissions: Set<string>; embedded?: boolean; currentUserId?: string; superAdmin?: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
@@ -995,12 +915,14 @@ function ModuleTable({ module, definition, permissions, embedded = false }: { mo
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<Row | null>(null);
-  const [riskOpen, setRiskOpen] = useState(false);
+  const [editor, setEditor] = useState<{ kind: EditorKind; row: Row } | null>(null);
+  const [directAction, setDirectAction] = useState<{ title: string; endpoint: string; data?: Row } | null>(null);
   const [reload, setReload] = useState(0);
   const [notice, setNotice] = useState("");
   const [savedViews, setSavedViews] = useState<Row[]>([]);
   const [saveOpen, setSaveOpen] = useState(false);
   const [viewName, setViewName] = useState("");
+  const [adjustmentsOpen, setAdjustmentsOpen] = useState(false);
   const paginated = !new Set(["memberships", "pricing", "settings", "roles"]).has(module);
 
   const loadRows = useCallback(async () => {
@@ -1041,6 +963,14 @@ function ModuleTable({ module, definition, permissions, embedded = false }: { mo
   const canNext = module === "users" ? rows.length === 25 : Boolean(nextCursor);
   const canExport = Boolean(definition.exportModule && permissions.has("audit.export"));
   const canManage = Boolean(definition.managePermission && permissions.has(definition.managePermission));
+  const openRow = (row: Row) => {
+    if (canManage && ["settings", "pricing", "memberships", "roles"].includes(module)) {
+      setEditor({ kind: module as EditorKind, row });
+    } else setSelected(row);
+  };
+  const saved = (message: string) => {
+    setEditor(null); setDirectAction(null); setSelected(null); setNotice(message); setReload((value) => value + 1);
+  };
 
   const exportRows = async () => {
     if (!definition.exportModule) return;
@@ -1097,6 +1027,9 @@ function ModuleTable({ module, definition, permissions, embedded = false }: { mo
     <div className={`admin-page ${embedded ? "is-embedded" : ""}`}>
       {!embedded && <PageHeading eyebrow={definition.eyebrow} title={definition.title}>
         {notice && <span className="admin-notice"><Check size={14} />{notice}</span>}
+        {canManage && module === "memberships" && <><button className="admin-primary-button" onClick={() => setEditor({ kind: "memberships", row: {} })}><Plus size={15} />新建套餐</button><button className="admin-secondary-button" onClick={() => setEditor({ kind: "user-membership", row: {} })}>分配用户会员</button></>}
+        {canManage && module === "points" && <button className="admin-primary-button" onClick={() => setEditor({ kind: "points", row: {} })}><Plus size={15} />调整积分</button>}
+        {canManage && module === "roles" && <button className="admin-primary-button" onClick={() => setEditor({ kind: "roles", row: {} })}><Plus size={15} />新建角色</button>}
         {canExport && <button className="admin-secondary-button" onClick={() => void exportRows()}><Download size={15} />导出 CSV</button>}
         <button className="admin-icon-button bordered" title="刷新" aria-label="刷新" onClick={() => setReload((value) => value + 1)}><RefreshCw className={loading ? "spin" : ""} size={17} /></button>
       </PageHeading>}
@@ -1123,23 +1056,38 @@ function ModuleTable({ module, definition, permissions, embedded = false }: { mo
           {saveOpen && <div className="admin-save-view-popover"><input autoFocus placeholder="视图名称" value={viewName} onChange={(event) => setViewName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void saveView()} /><button className="admin-primary-button compact" onClick={() => void saveView()}><Check size={14} />保存</button></div>}
         </div>
         {error ? <LoadError message={error} onRetry={() => setReload((value) => value + 1)} /> : loading ? <TableSkeleton /> : (
-          <DataTable rows={rows} columns={definition.columns} onSelect={setSelected} />
+          <DataTable rows={rows} columns={definition.columns} onSelect={openRow} actionLabel={canManage && ["settings", "pricing", "memberships", "roles"].includes(module) ? "编辑配置" : undefined} />
         )}
         {paginated && !error && <div className="admin-pagination"><span>第 {cursorHistory.length + 1} 页</span><div><button className="admin-icon-button bordered" aria-label="上一页" title="上一页" disabled={!cursorHistory.length} onClick={() => { const history = [...cursorHistory]; const previous = history.pop() ?? null; setCursor(previous); setCursorHistory(history); }}><ArrowLeft size={16} /></button><button className="admin-icon-button bordered" aria-label="下一页" title="下一页" disabled={!canNext} onClick={() => { setCursorHistory((history) => [...history, cursor]); setCursor(module === "users" ? `offset-${cursorHistory.length + 1}` : nextCursor); }}><ArrowRight size={16} /></button></div></div>}
       </section>
-      {selected && <DetailDrawer row={selected} module={module} permissions={permissions} onClose={() => setSelected(null)} onRisk={canManage && definition.riskAction ? () => setRiskOpen(true) : undefined} riskLabel={definition.riskAction?.label} />}
-      {riskOpen && selected && definition.riskAction && <RiskDialog row={selected} action={definition.riskAction} onClose={() => setRiskOpen(false)} onCreated={() => { setRiskOpen(false); setNotice("高风险操作申请已提交"); }} />}
+      {selected && !editor && !directAction && <DetailDrawer row={selected} module={module} permissions={permissions} onClose={() => setSelected(null)} actions={<>
+        {module === "users" && <>
+          {canManage && <><button className="admin-secondary-button" onClick={() => setEditor({ kind: "users", row: selected })}>编辑资料</button><button className="admin-secondary-button" onClick={() => setDirectAction({ title: selected.status === "disabled" ? "启用账号" : "禁用账号", endpoint: `/api/v1/admin/users/${selected.id}/${selected.status === "disabled" ? "enable" : "disable"}` })}>{selected.status === "disabled" ? "启用账号" : "禁用账号"}</button></>}
+          {permissions.has("memberships.manage") && <button className="admin-primary-button" onClick={() => setEditor({ kind: "user-membership", row: selected })}>分配 / 续期会员</button>}
+          {permissions.has("points.adjust") && <button className="admin-primary-button" onClick={() => setEditor({ kind: "points", row: selected })}>调整积分</button>}
+          {permissions.has("roles.manage") && <button className="admin-secondary-button" onClick={() => setEditor({ kind: "user-roles", row: selected })}>分配角色</button>}
+        </>}
+        {module === "points" && canManage && <button className="admin-primary-button" onClick={() => setEditor({ kind: "points", row: selected })}>调整该用户积分</button>}
+        {module === "jobs" && canManage && <>
+          {selected.status === "retry_wait" && <button className="admin-primary-button" onClick={() => setDirectAction({ title: "重试任务", endpoint: `/api/v1/admin/jobs/${selected.id}/retry` })}>重试任务</button>}
+          <button className="admin-secondary-button" onClick={() => setDirectAction({ title: "核对扣费与退款", endpoint: `/api/v1/admin/jobs/${selected.id}/reconcile` })}>核对扣费与退款</button>
+        </>}
+        {module === "assets" && canManage && ["ready", "quarantined"].includes(String(selected.status)) && <button className="admin-secondary-button" onClick={() => setDirectAction({ title: selected.status === "quarantined" ? "解除隔离" : "隔离资产", endpoint: `/api/v1/admin/assets/${selected.id}/quarantine`, data: { quarantined: selected.status !== "quarantined" } })}>{selected.status === "quarantined" ? "解除隔离" : "隔离资产"}</button>}
+      </>} />}
+      {module === "points" && <details onToggle={(event) => setAdjustmentsOpen(event.currentTarget.open)} className="admin-editor-section"><summary>查看待处理的积分调整</summary>{adjustmentsOpen && <PointAdjustments key={reload} currentUserId={currentUserId} superAdmin={superAdmin} canAdjust={canManage} onSaved={saved} />}</details>}
+      {editor && <AdminEditor key={`${editor.kind}:${String(editor.row.id || "new")}`} {...editor} permissions={permissions} onClose={() => setEditor(null)} onSaved={saved} />}
+      {directAction && <DirectActionDialog {...directAction} onClose={() => setDirectAction(null)} onSaved={saved} />}
     </div>
   );
 }
 
-function DataTable({ rows, columns, onSelect }: { rows: Row[]; columns: Column[]; onSelect: (row: Row) => void }) {
+function DataTable({ rows, columns, onSelect, actionLabel }: { rows: Row[]; columns: Column[]; onSelect: (row: Row) => void; actionLabel?: string }) {
   if (!rows.length) return <div className="admin-table-empty"><Search size={24} /><strong>没有符合条件的记录</strong></div>;
   return (
     <div className="admin-table-scroll">
       <table className="admin-data-table">
         <thead><tr>{columns.map((column) => <th key={column.key} className={column.className}>{column.label}</th>)}<th className="admin-row-action"><span className="sr-only">详情</span></th></tr></thead>
-        <tbody>{rows.map((row, index) => <tr key={String(row.id || index)} onClick={() => onSelect(row)}>{columns.map((column) => <td key={column.key} className={column.className}>{column.render ? column.render(row) : valueText(nested(row, column.key))}</td>)}<td className="admin-row-action"><button className="admin-icon-button" aria-label="查看详情" title="查看详情"><ChevronRight size={15} /></button></td></tr>)}</tbody>
+        <tbody>{rows.map((row, index) => <tr key={String(row.id || index)} onClick={() => onSelect(row)}>{columns.map((column) => <td key={column.key} className={column.className}>{column.render ? column.render(row) : valueText(nested(row, column.key))}</td>)}<td className="admin-row-action"><button className={actionLabel ? "admin-secondary-button compact" : "admin-icon-button"} aria-label={actionLabel || "查看详情"} title={actionLabel || "查看详情"}>{actionLabel}<ChevronRight size={15} /></button></td></tr>)}</tbody>
       </table>
     </div>
   );
@@ -1174,7 +1122,7 @@ const FIELD_LABELS: Record<string, string> = {
   details: "详情",
 };
 
-function DetailDrawer({ row, module, permissions, onClose, onRisk, riskLabel }: { row: Row; module: Exclude<ModuleId, "dashboard">; permissions: Set<string>; onClose: () => void; onRisk?: () => void; riskLabel?: string }) {
+function DetailDrawer({ row, module, permissions, onClose, actions }: { row: Row; module: Exclude<ModuleId, "dashboard">; permissions: Set<string>; onClose: () => void; actions?: ReactNode }) {
   return (
     <div className="admin-drawer-layer" role="presentation">
       <button className="admin-drawer-scrim" aria-label="关闭详情" onClick={onClose} />
@@ -1191,7 +1139,7 @@ function DetailDrawer({ row, module, permissions, onClose, onRisk, riskLabel }: 
           </section>
           {module === "users" && typeof row.id === "string" && <UserRelations userId={row.id} permissions={permissions} />}
         </div>
-        {onRisk && riskLabel && <footer><button className="admin-danger-button" onClick={onRisk}><CircleAlert size={15} />提交“{riskLabel}”申请</button></footer>}
+        {actions && <footer className="admin-detail-actions">{actions}</footer>}
       </aside>
     </div>
   );
@@ -1254,52 +1202,6 @@ function UserRelations({ userId, permissions }: { userId: string; permissions: S
   );
 }
 
-function RiskDialog({ row, action, onClose, onCreated }: { row: Row; action: NonNullable<ModuleDefinition["riskAction"]>; onClose: () => void; onCreated: () => void }) {
-  const [reason, setReason] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const targetId = String(row.id || "");
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setSubmitting(true);
-    setError("");
-    try {
-      await apiRequest("/api/v1/admin/action-requests", {
-        method: "POST",
-        body: JSON.stringify({
-          action_type: action.actionType,
-          target_type: action.targetType,
-          target_id: targetId,
-          payload: {},
-          reason,
-          risk_level: action.riskLevel,
-          confirmed,
-        }),
-      });
-      onCreated();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "申请提交失败");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="admin-modal-layer">
-      <button className="admin-modal-scrim" aria-label="关闭对话框" onClick={onClose} />
-      <form className="admin-confirm-dialog" onSubmit={submit}>
-        <header><span className="admin-risk-icon"><CircleAlert size={20} /></span><div><p>{action.riskLevel === "critical" ? "关键风险操作" : "高风险操作"}</p><h2>{action.label}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header>
-        <div className="admin-confirm-target"><span>操作对象</span><code>{targetId}</code></div>
-        <label>操作原因<textarea autoFocus value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} required minLength={3} /></label>
-        <label className="admin-confirm-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span><Check size={13} /></span><strong>确认提交“{action.label}”审批申请</strong></label>
-        {error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}
-        <footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-danger-button" disabled={!confirmed || reason.trim().length < 3 || submitting}>{submitting ? <RefreshCw className="spin" size={15} /> : <CircleAlert size={15} />}提交{action.label}申请</button></footer>
-      </form>
-    </div>
-  );
-}
 
 function AuditWorkspace({ definition, permissions, currentUserId }: { definition: ModuleDefinition; permissions: Set<string>; currentUserId: string }) {
   type AuditTab = "logs" | "events" | "blocks" | "limits" | "requests";

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import hashlib
 import json
 import uuid
@@ -7,13 +8,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import ApiError
 from app.domain.ids import uuid7
 from app.domain.memberships import MEMBERSHIP_PLAN_SEEDS
 from app.repositories.models import (
+    ConfigGroup,
+    ConfigVersion,
     MembershipEvent,
     MembershipPlan,
     OutboxEvent,
@@ -228,18 +231,46 @@ class EntitlementService:
         if active is not None:
             return active
         plans = await sync_builtin_membership_plans(session)
-        snapshot = await self._snapshot_for_plan(session, plans["free"])
+        plan = plans["free"]
+        membership_count = await session.scalar(
+            select(func.count(UserMembership.id)).where(UserMembership.user_id == user_id)
+        )
+        if not membership_count:
+            configured_values = await session.scalar(
+                select(ConfigVersion.values)
+                .join(ConfigGroup, ConfigGroup.id == ConfigVersion.group_id)
+                .where(
+                    ConfigGroup.code == "general",
+                    ConfigVersion.version == ConfigGroup.active_version,
+                    ConfigVersion.status == "active",
+                )
+            )
+            if isinstance(configured_values, dict):
+                candidate = plans.get(str(configured_values.get("default_membership_code")))
+                if candidate is not None and candidate.status == "active":
+                    plan = candidate
+        ends_at = None
+        if plan.billing_period in {"month", "year"}:
+            month_index = current_time.year * 12 + current_time.month - 1
+            month_index += 1 if plan.billing_period == "month" else 12
+            year, month = divmod(month_index, 12)
+            ends_at = current_time.replace(
+                year=year,
+                month=month + 1,
+                day=min(current_time.day, calendar.monthrange(year, month + 1)[1]),
+            )
+        snapshot = await self._snapshot_for_plan(session, plan)
         membership = UserMembership(
             id=uuid7(),
             user_id=user_id,
-            plan_id=plans["free"].id,
+            plan_id=plan.id,
             status="active",
             starts_at=current_time,
-            ends_at=None,
+            ends_at=ends_at,
             auto_renew=False,
             source="system",
             assigned_by=assigned_by,
-            reason="默认 Free 会员",
+            reason=f"默认 {plan.name} 会员",
             entitlement_snapshot=snapshot,
         )
         session.add(membership)
@@ -705,12 +736,12 @@ class EntitlementService:
     def _validate_period(
         plan: MembershipPlan, starts_at: datetime, ends_at: datetime | None
     ) -> None:
-        if plan.code == "free":
+        if plan.billing_period == "none":
             if ends_at is not None:
-                raise ApiError(422, "INVALID_MEMBERSHIP_PERIOD", "Free 会员必须长期有效")
+                raise ApiError(422, "INVALID_MEMBERSHIP_PERIOD", "长期会员不能设置到期时间")
             return
         if ends_at is None:
-            raise ApiError(422, "INVALID_MEMBERSHIP_PERIOD", "Basic/Pro 必须设置到期时间")
+            raise ApiError(422, "INVALID_MEMBERSHIP_PERIOD", "周期会员必须设置到期时间")
         if ends_at <= starts_at:
             raise ApiError(422, "INVALID_MEMBERSHIP_PERIOD", "到期时间必须晚于生效时间")
 
