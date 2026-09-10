@@ -11,6 +11,7 @@ from app.config import Settings
 from app.image_ops import (
     ImageInputError,
     apply_color_effect,
+    finalize_print_extraction,
     has_chroma_key_background,
     remove_background,
     remove_solid_background,
@@ -27,9 +28,24 @@ from app.services.security import SecurityService
 from app.sub2api import Sub2APIClient, Sub2APIError
 
 AI_EDIT_PROMPTS = {
+    # Migrated from the legacy faithful-redraw tool: product extraction belongs here.
+    "ai.extract_print": (
+        "Recreate only the printed artwork visible on the reference product (clothing, mug, bag, "
+        "or another print-on-demand product) as a clean, flat, front-facing high-resolution "
+        "source image. Preserve exact text, spelling, line breaks, composition, proportions, "
+        "colors, outlines, characters, objects, and small details. Remove fabric, folds, surface "
+        "texture, perspective, lighting, shadows, and the photographed product. Never redesign, "
+        "simplify, crop, add, or remove artwork. Place the complete artwork with a small clear "
+        "margin on a perfectly uniform fully saturated green #00FF00 background, or magenta "
+        "#FF00FF only if green occurs in the artwork. Keep white ink white and black ink black. "
+        "No mockup, no checkerboard, no ground plane, no drop shadow. Recover crisp print edges."
+    ),
     "ai.redraw": (
-        "Faithfully redraw the complete source artwork at high resolution. Preserve exact text, "
-        "layout, colors, geometry, subjects, and all intentional details. Do not add or remove content."
+        "Faithfully restore the complete source image at high resolution. Recover natural edges, "
+        "textures and fine detail, removing blur, compression artifacts, noise and jagged edges. "
+        "Preserve exact text, layout, colors, geometry, subjects, background, framing, perspective "
+        "and all intentional details. Do not extract artwork from a product, remove backgrounds, "
+        "flatten perspective, redesign, add or remove content."
     ),
     "ai.repair": (
         "Repair only the area selected by the mask according to the user instruction. Preserve every "
@@ -255,6 +271,18 @@ class ImageJobExecutor:
                     output_format="png",
                 )
             )
+            if operation == "ai.extract_print":
+                output, metadata = await asyncio.to_thread(finalize_print_extraction, upstream.data)
+                return (
+                    output,
+                    "png",
+                    None,
+                    {
+                        **metadata,
+                        "revised_prompt": upstream.revised_prompt,
+                        "workflow": "faithful-product-print-extraction",
+                    },
+                )
             return (
                 upstream.data,
                 upstream.output_format,

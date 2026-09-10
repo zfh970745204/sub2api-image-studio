@@ -73,6 +73,7 @@ import {
   type UserNotification,
 } from "./user-api";
 import { MaskCanvas, type MaskCanvasHandle } from "./MaskCanvas";
+import { ComparisonPreview } from "./ComparisonPreview";
 
 type AppRoute = "home" | "studio" | "assets" | "jobs" | "points" | "membership" | "profile";
 
@@ -134,6 +135,7 @@ const OPERATION_META: Record<
 > = {
   "ai.generate": { label: "AI 生成", description: "根据描述创建新图案", icon: Sparkles, source: false },
   "ai.redraw": { label: "高清重绘", description: "保留内容并提升清晰度", icon: WandSparkles, source: true },
+  "ai.extract_print": { label: "印花提取", description: "从产品照片还原印花，保留设计与色彩，输出透明 PNG", icon: FileImage, source: true },
   "cutout.smart": { label: "智能抠图", description: "输出透明 PNG", icon: Scissors, source: true },
   "upscale.2x": { label: "2x 放大", description: "保真放大两倍", icon: Scaling, source: true },
   "upscale.4x": { label: "4x 放大", description: "保真放大四倍", icon: Scaling, source: true },
@@ -208,10 +210,17 @@ function UserApp() {
   const pathname = usePathname();
   if (pathname === "/forgot-password") return <ForgotPasswordPage />;
   if (pathname === "/login") return <LoginPage />;
+  if (pathname === "/register") return <RegisterPage />;
   return <ProtectedApp pathname={pathname} />;
 }
 
 function LoginPage() {
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void api.authOptions().then((options) => { if (active) setRegistrationEnabled(options.registration_enabled); }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -279,21 +288,63 @@ function LoginPage() {
             {busy ? "正在登录" : "登录"}
           </button>
         </form>
+        {registrationEnabled && <button className="user-text-button" onClick={() => navigate("/register")} type="button">没有账号？创建账号<ArrowRight size={15} /></button>}
         <button className="user-text-button" onClick={() => navigate("/forgot-password")} type="button">
           忘记密码
           <ArrowRight size={15} />
         </button>
       </section>
       <aside className="user-auth-context" aria-label="工作台能力">
-        <div className="user-auth-art">
-          <div className="user-auth-canvas"><FileImage size={56} strokeWidth={1.3} /></div>
-          <div className="user-auth-tool"><Scissors size={19} /><span>智能抠图</span></div>
-          <div className="user-auth-tool"><Scaling size={19} /><span>尺寸放大</span></div>
-          <div className="user-auth-tool"><History size={19} /><span>版本追踪</span></div>
-        </div>
+        <div className="user-auth-showcase"><span>FROM ARTWORK TO ANYTHING</span><h2>让每一份创意，<br />拥有更多可能。</h2><img src="/studio-collection.svg" alt="植物印花及其 T 恤、杯子应用示意" width="720" height="520" /><p>提取一枚印花，打磨一张图片，<br />让设计从屏幕走向你的下一件产品。</p></div>
       </aside>
     </main>
   );
+}
+
+function RegisterPage() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const submitting = useRef(false);
+  useEffect(() => {
+    let active = true;
+    setError("");
+    void api.authOptions().then((options) => { if (active) setEnabled(options.registration_enabled); })
+      .catch((reason) => { if (active) setError(messageOf(reason, "无法获取注册状态")); });
+    return () => { active = false; };
+  }, [revision]);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (submitting.current || !enabled) return;
+    if (password !== confirmation) { setError("两次输入的密码不一致"); return; }
+    submitting.current = true;
+    setBusy(true); setError("");
+    try { await api.register(email.trim(), name.trim(), password); navigate("/app"); }
+    catch (reason) {
+      setError(messageOf(reason, "注册失败"));
+      if (reason instanceof ApiError && reason.code === "REGISTRATION_CLOSED") setEnabled(false);
+    } finally { submitting.current = false; setBusy(false); }
+  }
+  return <main className="user-auth-page compact"><section className="user-auth-panel" aria-labelledby="register-title">
+    <Brand />
+    <div className="user-auth-heading"><span>让创意成为作品</span><h1 id="register-title">创建账号</h1><p>一个账号，开启你的图片创作工作台。</p></div>
+    {enabled === false ? <InlineMessage tone="warning">管理员已关闭注册，请联系管理员开通账号。</InlineMessage>
+      : enabled === null ? !error && <MiniLoading /> : <form onSubmit={(event) => void submit(event)}>
+        <label><span>显示名称</span><input autoComplete="nickname" maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <label><span>邮箱</span><input autoComplete="email" type="email" maxLength={320} required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <label><span>密码</span><input autoComplete="new-password" type="password" minLength={12} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} /><small>12–128 个字符，建议使用较长的独立密码。</small></label>
+        <label><span>确认密码</span><input autoComplete="new-password" type="password" minLength={12} maxLength={128} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
+        <button className="user-primary user-auth-submit" disabled={busy} type="submit">{busy ? <LoaderCircle className="spin" size={18} /> : <UserRound size={18} />}{busy ? "正在创建" : "注册并进入工作台"}</button>
+      </form>}
+    {error && <InlineMessage tone="error">{error}</InlineMessage>}
+    {error && enabled === null && <button className="user-secondary" onClick={() => setRevision((value) => value + 1)} type="button">重新加载注册状态</button>}
+    <button className="user-text-button" onClick={() => navigate("/login")} type="button">已有账号？返回登录<ArrowRight size={15} /></button>
+  </section></main>;
 }
 
 function ForgotPasswordPage() {
@@ -561,10 +612,10 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
       </PageHeader>
       <section className="user-creative-hero">
         <div><span><Sparkles size={15} />为每一个好想法，留出空间</span><h2>从灵感，到作品。<br /><em>只差一次创作。</em></h2><p>生成、精修、抠图、放大。把繁琐交给工具，把专注留给创意。</p><button className="user-primary" onClick={() => navigate("/app/studio?tool=ai.generate")} type="button">开始新的创作<ArrowRight size={17} /></button></div>
-        <div className="user-hero-art" aria-hidden="true"><div className="user-art-sheet back" /><div className="user-art-sheet front"><div className="user-art-sun" /><div className="user-art-hill one" /><div className="user-art-hill two" /><span>MAKE ROOM<br />FOR IDEAS.</span><small>STUDIO / 001</small></div><div className="user-art-badge"><Sparkles size={17} />无限灵感</div></div>
+        <img className="user-collection-art" src="/studio-collection.svg" alt="同一植物印花在画稿、T 恤和杯子上的应用" width="720" height="520" />
       </section>
       <section className="user-quick-tools" aria-label="快捷创作">
-        {(["ai.generate", "cutout.smart", "upscale.2x"] as const).map((code) => { const item = OPERATION_META[code]; const Icon = item.icon; return <button key={code} onClick={() => navigate(`/app/studio?tool=${code}`)} type="button"><span><Icon size={22} /></span><div><strong>{item.label}</strong><small>{item.description}</small></div><ArrowRight size={17} /></button>; })}
+        {(["ai.generate", "ai.extract_print", "ai.redraw"] as const).map((code) => { const item = OPERATION_META[code]; const Icon = item.icon; return <button key={code} onClick={() => navigate(`/app/studio?tool=${code}`)} type="button"><span><Icon size={22} /></span><div><strong>{item.label}</strong><small>{item.description}</small></div><ArrowRight size={17} /></button>; })}
       </section>
       <section className="user-stat-strip" aria-label="账户概览">
         <button onClick={() => navigate("/app/points")} type="button"><span><Coins size={18} />可用积分</span><strong>{bootstrap.points.balance.toLocaleString("zh-CN")}</strong><small>累计消费 {bootstrap.points.lifetime_spent.toLocaleString("zh-CN")}</small></button>
@@ -632,7 +683,6 @@ function StudioPage({
   const submitting = useRef(false);
   const brushRef = useRef<MaskCanvasHandle>(null);
   const [maskRevision, setMaskRevision] = useState(0);
-  const [compareSource, setCompareSource] = useState(false);
   const [pollError, setPollError] = useState("");
   const [previewRevision, setPreviewRevision] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -688,8 +738,9 @@ function StudioPage({
   const selectedOperation = operations.find((item) => item.code === operationCode);
   const meta = OPERATION_META[operationCode] || OPERATION_META["ai.redraw"];
   const source = assets.find((item) => item.id === sourceId) || null;
-  const displayAsset = compareSource ? source : resultAsset || (meta.source ? source : null);
-  const displayUrl = useSignedAssetUrl(displayAsset?.id || null, previewRevision, (reason) => setError(messageOf(reason, "预览地址获取失败")));
+  const displayAsset = resultAsset || (meta.source ? source : null);
+  const sourceUrl = useSignedAssetUrl(meta.source ? source?.id || null : null, previewRevision, (reason) => setError(messageOf(reason, "原图预览地址获取失败")));
+  const resultUrl = useSignedAssetUrl(resultAsset?.id || null, previewRevision, (reason) => setError(messageOf(reason, "结果预览地址获取失败")));
   const needsMask = operationCode === "ai.repair" || operationCode === "ai.text_fix";
   const canCreate = bootstrap.permissions.includes("studio.use") && bootstrap.permissions.includes("tasks.create");
   const maintenance = bootstrap.service.status !== "ok";
@@ -707,7 +758,6 @@ function StudioPage({
     setMaskId("");
     setMaskRevision(0);
     setQuote(null);
-    setCompareSource(false);
   }, [sourceId]);
 
   useEffect(() => {
@@ -759,7 +809,6 @@ function StudioPage({
           const { asset } = await api.asset(job.output_asset_id);
           if (cancelled) return;
           setResultAsset(asset);
-          setCompareSource(false);
           setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
           setNotice("");
         }
@@ -786,7 +835,7 @@ function StudioPage({
     if (operationCode === "ai.generate") {
       return { prompt: form.prompt.trim(), size: form.size, quality: form.quality, output_format: "png" };
     }
-    if (operationCode === "ai.redraw" || operationCode === "ai.variant") {
+    if (operationCode === "ai.redraw" || operationCode === "ai.variant" || operationCode === "ai.extract_print") {
       return { instruction: form.prompt.trim(), size: "auto", quality: form.quality };
     }
     if (operationCode === "ai.repair" || operationCode === "ai.text_fix") {
@@ -903,7 +952,6 @@ function StudioPage({
     setError("");
     setNotice("");
     setResultAsset(null);
-    setCompareSource(false);
     if (!jobRunning) setActiveJob(null);
     api.updatePreferences({ studio_layout: { last_tool: code } }).catch(() => undefined);
   }
@@ -935,28 +983,25 @@ function StudioPage({
             return <button aria-label={item.label} aria-pressed={operationCode === operation.code} disabled={Boolean(busy) || jobRunning} className={operationCode === operation.code ? "active" : ""} key={operation.code} onClick={() => selectOperation(operation.code)} title={`${item.label} · 预计 ${operation.member_base_points ?? operation.current_price?.base_points ?? 0} 积分起`} type="button"><Icon size={19} /><span>{item.label}</span></button>;
           })}
         </nav>
-        <section className="user-canvas-column">
+        <section className="user-canvas-column" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void upload(event.dataTransfer.files[0]); }}>
           <header className="user-canvas-head">
-            <span><FileImage size={17} /><strong>{resultAsset && !compareSource ? "处理结果" : displayAsset ? "来源素材" : "创作预览"}</strong>{displayAsset && <small>{displayAsset.width} × {displayAsset.height}</small>}</span>
-            <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{displayAsset && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
-            {resultAsset && <div className="user-canvas-actions">{source && <button className="user-secondary compact" aria-pressed={compareSource} onClick={() => setCompareSource((value) => !value)} type="button"><Eye size={16} />{compareSource ? "查看结果" : "对比原图"}</button>}<button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button></div>}
+            <span><FileImage size={17} /><strong>{meta.source ? "原图与结果" : "创作预览"}</strong></span>
+            <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{(source || resultAsset) && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
+            {resultAsset && <div className="user-canvas-actions"><button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button></div>}
           </header>
-          <div className={`user-canvas preview-${previewMode}${displayAsset ? " has-image" : ""}`} style={previewStyle}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => { event.preventDefault(); void upload(event.dataTransfer.files[0]); }}>
-            {displayAsset && displayUrl ? <div className="user-image-stage" style={{ aspectRatio: `${displayAsset.width || 1} / ${displayAsset.height || 1}`, width: `min(100%, ${(displayAsset.width || 1) / (displayAsset.height || 1)} * 100cqh)` }}>
-              <img alt={resultAsset && !compareSource ? "图片任务结果" : "来源素材预览"} src={displayUrl} onError={() => setError("图片预览加载失败，可尝试重新载入预览或下载图片。")}/>
-              {needsMask && !resultAsset && source?.width && source?.height && <MaskCanvas key={`${sourceId}:${maskRevision}`} ref={brushRef} disabled={Boolean(busy) || jobRunning} width={source.width} height={source.height} onChange={() => { setMaskId(""); setQuote(null); }} />}
-            </div> : busy === "loading" || displayAsset ? <MiniLoading /> : operationCode === "ai.generate" ? (
+          <ComparisonPreview key={`${sourceId}:${resultAsset?.id}:${operationCode}`} compare={meta.source} source={source ? { asset: source, url: sourceUrl } : null} result={resultAsset ? { asset: resultAsset, url: resultUrl } : null}
+            backgroundClass={`preview-${previewMode}`} backgroundStyle={previewStyle}
+            onError={() => setError("图片预览加载失败，可尝试重新载入预览或下载图片。")}
+            sourceOverlay={needsMask && !resultAsset && source?.width && source?.height ? <MaskCanvas key={`${sourceId}:${maskRevision}`} ref={brushRef} disabled={Boolean(busy) || jobRunning} width={source.width} height={source.height} onChange={() => { setMaskId(""); setQuote(null); }} /> : undefined}
+            empty={busy === "loading" ? <MiniLoading /> : operationCode === "ai.generate" ? (
               <div className="user-canvas-empty generation"><span><Sparkles size={32} /></span><small>YOUR NEXT CREATION</small><strong>把想象，变成看得见的作品</strong><p>在右侧写下你的想法，<br />选择尺寸与质量，即可开始创作。</p><div className="user-prompt-examples">{["极简植物线稿，米白背景，适合装饰画", "复古山脉与落日，丝网印刷风格"].map((prompt) => <button key={prompt} onClick={() => setForm({ ...form, prompt })} type="button">{prompt}<ArrowRight size={14} /></button>)}</div></div>
             ) : (
               <button className="user-canvas-empty" disabled={Boolean(busy) || jobRunning} onClick={() => uploadRef.current?.click()} type="button"><span><ImagePlus size={32} /></span><strong>放入图片，开始创作</strong><p>拖拽图片到这里，或点击上传</p><small>PNG / JPEG / WebP · 最大 {bootstrap.membership.entitlements.max_upload_mb} MB</small></button>
-            )}
+            )} />
             {activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status) && (
               <div className="user-job-progress" role="status"><span><LoaderCircle className="spin" size={17} /><strong>{JOB_STATUS[activeJob.status]?.label}</strong></span><div><i style={{ width: `${Math.max(4, activeJob.progress)}%` }} /></div><em>{activeJob.progress}%</em></div>
             )}
-          </div>
-          <div className="user-canvas-foot"><span>{needsMask && !resultAsset ? "紫色涂抹区域将被修改，其他区域保留" : "原图始终保留 · 每次处理生成独立版本"}</span>{resultAsset && resultAsset.kind !== "vector" && <button disabled={Boolean(busy)} onClick={() => { setSourceId(resultAsset.id); setResultAsset(null); setActiveJob(null); selectOperation("ai.redraw"); }} type="button">用这张图继续编辑<ArrowRight size={14} /></button>}</div>
+          {(resultAsset || needsMask) && <div className="user-canvas-foot"><span>{needsMask && !resultAsset ? "紫色涂抹区域将被修改，其他区域保留" : "原图保留 · 结果为独立版本"}</span>{resultAsset && resultAsset.kind !== "vector" && <button disabled={Boolean(busy)} onClick={() => { setSourceId(resultAsset.id); setResultAsset(null); setActiveJob(null); selectOperation("ai.redraw"); }} type="button">继续编辑结果<ArrowRight size={14} /></button>}</div>}
           {error && !quote && <InlineMessage tone="error">{error}</InlineMessage>}
           {notice && !error && <InlineMessage tone="success">{notice}</InlineMessage>}
           {pollError && <InlineMessage tone="warning">{pollError}</InlineMessage>}
@@ -986,7 +1031,9 @@ function StudioPage({
           {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
-          {operationCode === "cutout.smart" && resultAsset?.has_alpha && <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />}
+          {operationCode === "ai.extract_print" && <p className="user-mask-hint">适合衣服、杯子、帆布袋等产品照片。还原平面印花、修复褶皱和透视，保留原设计、文字与色彩。输出透明 PNG。印花较小时，先裁切到图案附近，效果更稳定。</p>}
+          {operationCode === "ai.redraw" && <p className="user-mask-hint">只提升清晰度、修复模糊与锯齿，保留主体、背景与构图。需要去除衣服或杯子并提取图案，请使用“印花提取”。</p>}
+          {resultAsset?.has_alpha && <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />}
           </fieldset>
           <div className="user-studio-submit">
           <div className="user-quote-summary"><span>预计积分</span><strong>{selectedOperation?.member_base_points ?? selectedOperation?.current_price?.base_points ?? "--"}<small>起</small></strong></div>
@@ -1572,7 +1619,7 @@ function EmptyState({ icon: Icon, title, description, compact = false }: { icon:
 }
 
 function Brand({ inverse = false }: { inverse?: boolean }) {
-  return <span className={`user-brand${inverse ? " inverse" : ""}`}><span><Images size={19} /></span><strong>Sub2Image</strong></span>;
+  return <span className={`user-brand${inverse ? " inverse" : ""}`}><img src="/brand-symbol.svg" width="34" height="34" alt="" /><strong>Sub2Image</strong></span>;
 }
 
 function Avatar({ name }: { name: string }) {

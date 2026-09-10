@@ -318,7 +318,7 @@ async def dashboard_summary(
                 .select_from(UserMembership)
                 .join(MembershipPlan, MembershipPlan.id == UserMembership.plan_id)
                 .where(UserMembership.status == "active")
-                .group_by(MembershipPlan.code)
+                .group_by(MembershipPlan.code, MembershipPlan.level)
                 .order_by(MembershipPlan.level)
             )
         ).all()

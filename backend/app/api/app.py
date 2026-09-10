@@ -18,6 +18,7 @@ from app.repositories.models import (
     UserNotification,
     UserPreference,
 )
+from app.services.configuration import runtime_config_value
 from app.services.memberships import EntitlementService
 from app.services.points import PointService
 
@@ -33,7 +34,9 @@ STUDIO_LAYOUT_RULES: dict[str, tuple[type, set[Any] | tuple[int, int] | None]] =
     "last_tool": (
         str,
         {
+            "ai.generate",
             "ai.redraw",
+            "ai.extract_print",
             "cutout.smart",
             "upscale.2x",
             "upscale.4x",
@@ -193,7 +196,14 @@ async def bootstrap(request: Request, principal: CurrentUser) -> dict[str, Any]:
         await PointService().ensure_onboarding_grant(
             session,
             user.id,
-            points=request.app.state.settings.onboarding_points,
+            points=int(
+                await runtime_config_value(
+                    request.app.state.runtime_services,
+                    "general",
+                    "default_points",
+                    request.app.state.settings.onboarding_points,
+                )
+            ),
             request_id=request_id,
         )
         account = (

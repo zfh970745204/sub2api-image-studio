@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import Principal, get_current_principal
 from app.api.errors import ApiError
+from app.domain.ids import uuid7
 from app.repositories.models import (
     AuthSession,
+    ConfigGroup,
+    ConfigVersion,
     LoginAttempt,
     PasswordResetToken,
     Role,
@@ -21,7 +24,7 @@ from app.repositories.models import (
     UserRole,
 )
 from app.services.auth import AuthService, as_utc, utcnow
-from app.services.configuration import runtime_config_value
+from app.services.configuration import GeneralValues, runtime_config_value
 from app.services.memberships import EntitlementService
 from app.services.points import PointService
 
@@ -41,6 +44,32 @@ class LoginRequest(BaseModel):
     def limit_password(cls, value: SecretStr) -> SecretStr:
         if not 1 <= len(value.get_secret_value()) <= 128:
             raise ValueError("密码长度必须为 1-128 个字符")
+        return value
+
+
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(max_length=320)
+    display_name: str = Field(min_length=1, max_length=120)
+    password: SecretStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return validate_email(value)
+
+    @field_validator("display_name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("显示名称不能为空")
+        return value.strip()
+
+    @field_validator("password")
+    @classmethod
+    def check_password(cls, value: SecretStr) -> SecretStr:
+        validate_password(value.get_secret_value())
         return value
 
 
@@ -170,6 +199,96 @@ def clear_session_cookie(response: Response, request: Request) -> None:
         httponly=True,
         samesite="lax",
     )
+
+
+async def registration_config(session) -> dict[str, Any]:
+    # Read the active version directly: closing registration must not wait for a cache TTL.
+    values = await session.scalar(
+        select(ConfigVersion.values)
+        .join(ConfigGroup, ConfigGroup.id == ConfigVersion.group_id)
+        .where(
+            ConfigGroup.code == "general",
+            ConfigVersion.version == ConfigGroup.active_version,
+            ConfigVersion.status == "active",
+        )
+    )
+    return {**GeneralValues().model_dump(), **(values or {})}
+
+
+@router.get("/options")
+async def auth_options(request: Request) -> dict[str, bool]:
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        values = await registration_config(session)
+    return {"registration_enabled": bool(values["registration_enabled"])}
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register(
+    payload: RegisterRequest, request: Request, response: Response
+) -> dict[str, Any]:
+    service = auth_service(request)
+    security_service = getattr(request.app.state, "security_service", None)
+    if security_service is not None:
+        await security_service.enforce_login(request, policy_code="register")
+    _, ip_hash, request_id = request_metadata(request, service)
+    database = request.app.state.runtime_services.database
+    async with database.session_factory() as session:
+        values = await registration_config(session)
+        if not values["registration_enabled"]:
+            raise ApiError(403, "REGISTRATION_CLOSED", "管理员已关闭注册，请联系管理员开通账号")
+        user = User(
+            id=uuid7(),
+            email=payload.email,
+            display_name=payload.display_name,
+            password_hash=service.hash_password(payload.password.get_secret_value()),
+            status="active",
+            session_version=1,
+            permission_version=1,
+        )
+        session.add(user)
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise ApiError(409, "USER_ALREADY_EXISTS", "邮箱已被使用，请登录或联系管理员") from exc
+        role = await service.ensure_role(
+            session, code="user", name="普通用户", description="已激活账号的基础工作台角色"
+        )
+        await service.assign_role(session, user_id=user.id, role=role, assigned_by=user.id)
+        await membership_service.ensure_default_membership(session, user.id, request_id=request_id)
+        await point_service.ensure_onboarding_grant(
+            session, user.id, points=int(values["default_points"]), request_id=request_id
+        )
+        now = utcnow()
+        raw_token = service.new_token()
+        user.last_login_at = now
+        session.add(
+            AuthSession(
+                id=uuid7(),
+                user_id=user.id,
+                token_hash=service.token_hash(raw_token),
+                session_version=user.session_version,
+                ip_hash=ip_hash,
+                user_agent=request.headers.get("user-agent", "unknown")[:500],
+                expires_at=now + timedelta(days=request.app.state.settings.auth_session_ttl_days),
+                last_seen_at=now,
+                created_at=now,
+            )
+        )
+        service.record_audit(
+            session,
+            action="user.registered",
+            aggregate_type="user",
+            aggregate_id=user.id,
+            actor_user_id=user.id,
+            subject_user_id=user.id,
+            request_id=request_id,
+            details={"ip_hash": ip_hash},
+        )
+        await session.commit()
+        await session.refresh(user)
+    set_session_cookie(response, request, raw_token)
+    return {"user": user_payload(user, roles=["user"])}
 
 
 @router.post("/login")

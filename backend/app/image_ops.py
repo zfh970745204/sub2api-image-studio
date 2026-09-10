@@ -333,6 +333,28 @@ def extract_print_artwork(
     }
 
 
+def finalize_print_extraction(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
+    """Preserve native alpha or key the legacy redraw's flat chroma background."""
+    with Image.open(BytesIO(raw_png)) as source:
+        source.load()
+        rgba = source.convert("RGBA")
+        alpha_min, alpha_max = rgba.getchannel("A").getextrema()
+        if alpha_min == 0 and alpha_max > 0:
+            output = BytesIO()
+            rgba.save(output, format="PNG", optimize=True)
+            return output.getvalue(), {"method": "native-alpha", "transparent_background": True}
+    if not has_chroma_key_background(raw_png):
+        raise ImageInputError(
+            "图片服务未返回透明或纯色底的印花，无法安全去除产品背景。请重试，或裁切到印花区域后重新上传。"
+        )
+    output, metadata = remove_solid_background(raw_png)
+    with Image.open(BytesIO(output)) as image:
+        alpha_min, alpha_max = image.getchannel("A").getextrema()
+        if alpha_min != 0 or alpha_max == 0:
+            raise ImageInputError("未提取到有效印花，请上传印花更清晰的产品照片后重试。")
+    return output, {**metadata, "transparent_background": True}
+
+
 def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
     """Turn a flat background into alpha without erasing neutral printed ink."""
     with Image.open(BytesIO(raw_png)) as source:

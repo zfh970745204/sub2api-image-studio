@@ -320,7 +320,7 @@ async def test_versioned_price_quote_snapshot_and_idempotent_charge(
         operations = await member_client.get("/api/v1/operations")
         assert operations.status_code == 200
         by_code = {item["code"]: item for item in operations.json()["items"]}
-        assert len(by_code) == 10
+        assert len(by_code) == 11
         assert by_code["ai.generate"]["member_base_points"] == 20
 
         old_quote = await quote(member_client, "ai.generate")

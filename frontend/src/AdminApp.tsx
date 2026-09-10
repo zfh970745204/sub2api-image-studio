@@ -521,7 +521,7 @@ function AdminApp() {
       />
       <aside className={`admin-sidebar ${sidebarOpen ? "is-open" : ""}`}>
         <div className="admin-brand">
-          <span className="admin-brand-mark"><Images size={19} /></span>
+          <img className="admin-brand-mark" src="/brand-symbol.svg" alt="" width="34" height="34" />
           <span><strong>Sub2Image</strong><small>管理后台</small></span>
         </div>
         <nav className="admin-nav" aria-label="后台导航">
@@ -605,7 +605,7 @@ function AdminApp() {
 function AdminBoot() {
   return (
     <div className="admin-boot">
-      <span className="admin-brand-mark"><Images size={21} /></span>
+      <img className="admin-brand-mark" src="/brand-symbol.svg" alt="" width="34" height="34" />
       <RefreshCw className="spin" size={18} />
     </div>
   );
@@ -637,7 +637,7 @@ function AdminLogin({ onSuccess, error: initialError }: { onSuccess: () => Promi
   return (
     <div className="admin-login-page">
       <section className="admin-login-panel">
-        <div className="admin-login-brand"><span className="admin-brand-mark"><Images size={21} /></span><span><strong>Sub2Image</strong><small>管理后台</small></span></div>
+        <div className="admin-login-brand"><img className="admin-brand-mark" src="/brand-symbol.svg" alt="" width="34" height="34" /><span><strong>Sub2Image</strong><small>管理后台</small></span></div>
         <form onSubmit={submit}>
           <h1>管理员登录</h1>
           <label>邮箱或用户名<input autoFocus autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>
@@ -772,13 +772,17 @@ function Dashboard() {
   const [series, setSeries] = useState<TimeseriesPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [seriesError, setSeriesError] = useState("");
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError("");
-    Promise.all([
+    setSeriesError("");
+    setSummary(null);
+    setSeries([]);
+    Promise.allSettled([
       apiRequest<DashboardSummary>(`/api/v1/admin/dashboard/summary?range=${range}`),
       apiRequest<{ points: TimeseriesPoint[] }>(
         `/api/v1/admin/dashboard/timeseries?metric=${metric}&range=${range}`,
@@ -786,8 +790,10 @@ function Dashboard() {
     ])
       .then(([nextSummary, nextSeries]) => {
         if (!active) return;
-        setSummary(nextSummary);
-        setSeries(nextSeries.points);
+        if (nextSummary.status === "fulfilled") setSummary(nextSummary.value);
+        else setError(nextSummary.reason instanceof Error ? nextSummary.reason.message : "总览加载失败");
+        if (nextSeries.status === "fulfilled") setSeries(nextSeries.value.points);
+        else setSeriesError(nextSeries.reason instanceof Error ? nextSeries.reason.message : "趋势加载失败");
       })
       .catch((caught) => active && setError(caught instanceof Error ? caught.message : "总览加载失败"))
       .finally(() => active && setLoading(false));
@@ -826,7 +832,7 @@ function Dashboard() {
                   ))}
                 </div>
               </div>
-              <SeriesChart points={series} metric={metric} />
+              {seriesError ? <LoadError message={seriesError} onRetry={() => setReload((value) => value + 1)} /> : <SeriesChart points={series} metric={metric} />}
             </div>
             <div className="admin-panel admin-health-panel">
               <div className="admin-panel-heading"><div><h2>服务状态</h2><p>{dateTime(summary.generated_at)} 更新</p></div></div>

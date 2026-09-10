@@ -203,6 +203,11 @@ export interface SessionInfo {
 }
 
 export const api = {
+  authOptions: () => request<{ registration_enabled: boolean }>("/api/v1/auth/options"),
+  register: (email: string, display_name: string, password: string) =>
+    request<{ user: UserSummary }>("/api/v1/auth/register", {
+      method: "POST", body: JSON.stringify({ email, display_name, password }),
+    }),
   login: (identifier: string, password: string) =>
     request<{ user: UserSummary }>("/api/v1/auth/login", {
       method: "POST",

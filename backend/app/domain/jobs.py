@@ -17,6 +17,7 @@ class OperationSeed:
 OPERATION_SEEDS = (
     OperationSeed("ai.generate", "AI 生成图案", "sub2api", "image-jobs", 20, 240, 3),
     OperationSeed("ai.redraw", "高清重绘", "sub2api", "image-jobs", 18, 240, 3),
+    OperationSeed("ai.extract_print", "印花提取", "sub2api", "image-jobs", 18, 240, 3),
     OperationSeed("ai.repair", "局部修复", "sub2api", "image-jobs", 15, 240, 3),
     OperationSeed("ai.text_fix", "文字修正", "sub2api", "image-jobs", 15, 240, 3),
     OperationSeed("ai.variant", "生成变体", "sub2api", "image-jobs", 18, 240, 3),

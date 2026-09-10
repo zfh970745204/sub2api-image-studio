@@ -26,6 +26,68 @@ def required_test_setting(name: str) -> str:
 
 
 @pytest.mark.asyncio
+async def test_postgres_dashboard_summary_with_active_membership():
+    """PostgreSQL rejects ungrouped ORDER BY columns that SQLite silently permits."""
+    from types import SimpleNamespace
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from starlette.requests import Request
+
+    from app.api.admin import dashboard_summary
+    from app.domain.ids import uuid7
+    from app.repositories.models import User
+    from app.services.memberships import EntitlementService
+
+    database_url = required_test_setting("TEST_DATABASE_URL")
+    assert (make_url(database_url).database or "").endswith("_test")
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            outer = await connection.begin()
+            try:
+                factory = async_sessionmaker(
+                    bind=connection,
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                user_id = uuid7()
+                async with factory() as session:
+                    session.add(
+                        User(
+                            id=user_id,
+                            email=f"{user_id}@example.test",
+                            display_name="Dashboard test",
+                            status="active",
+                            session_version=1,
+                            permission_version=1,
+                        )
+                    )
+                    await session.flush()
+                    membership = await EntitlementService().ensure_default_membership(
+                        session, user_id
+                    )
+                    plan_code = membership.entitlement_snapshot["plan_code"]
+                    await session.commit()
+                app = SimpleNamespace(
+                    state=SimpleNamespace(
+                        runtime_services=SimpleNamespace(
+                            database=SimpleNamespace(session_factory=factory)
+                        )
+                    )
+                )
+                result = await dashboard_summary(
+                    Request({"type": "http", "app": app}), None, range_value="7d"
+                )
+                assert result["users"]["memberships"][plan_code] >= 1
+                assert result["users"]["total"] >= 1
+                assert result["jobs"]["total"] >= 0
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("price", [0, 20])
 async def test_postgres_job_charge_replay_and_refund_are_atomic(price: int) -> None:
     """Exercise actual migrated FK constraints, not just PostgreSQL connectivity."""

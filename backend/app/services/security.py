@@ -45,6 +45,7 @@ class PolicyDefault:
 
 POLICY_DEFAULTS = (
     PolicyDefault("login", "登录", "ip", 25, 900),
+    PolicyDefault("register", "公开注册", "ip", 5, 3600),
     PolicyDefault("upload", "素材上传", "both", 20, 3600),
     PolicyDefault("job_create", "任务创建", "both", 30, 60),
     PolicyDefault("quote", "任务报价", "both", 60, 60),
@@ -215,7 +216,7 @@ class SecurityService:
                 {"policy": policy.code, "retry_after": retry_after},
             )
 
-    async def enforce_login(self, request) -> None:
+    async def enforce_login(self, request, *, policy_code: str = "login") -> None:
         database = request.app.state.runtime_services.database
         async with database.session_factory() as session:
             try:
@@ -227,7 +228,7 @@ class SecurityService:
                 )
                 await self.enforce_request(
                     session,
-                    policy_code="login",
+                    policy_code=policy_code,
                     user_id=None,
                     ip_hash=request.state.ip_hash,
                     request_id=request.state.request_id,

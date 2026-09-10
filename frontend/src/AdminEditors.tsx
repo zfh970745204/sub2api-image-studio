@@ -83,6 +83,7 @@ const CONFIG_FIELDS: Record<string, FieldDefinition[]> = {
     { key: "from_email", label: "发件人邮箱", required: false },
   ],
   general: [
+    { key: "registration_enabled", label: "开放用户注册", type: "checkbox", hint: "开启后登录页显示注册入口；关闭后已有账号仍可登录，管理员仍可邀请用户。" },
     { key: "default_membership_code", label: "新用户默认会员代码", hint: "填写已启用的会员套餐代码，例如 free" },
     { key: "default_points", label: "新用户赠送积分", type: "number", min: 0, max: 1000000 },
     { key: "max_upload_mb", label: "上传大小上限（MB）", type: "number", min: 1, max: 100 },
@@ -123,7 +124,7 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
     onSaved("配置已保存并生效");
   }}>
     <p className="admin-editor-note">填写配置后点击“保存并生效”。密钥留空保留原值，保存后可测试连接。</p>
-    {code === "general" && <p className="admin-editor-note">当前账号由管理员邀请；公开注册与邮件自助找回暂未开放。</p>}
+    {code === "general" && <p className="admin-editor-note">公开注册用户自动获得普通用户权限、下方默认会员和赠送积分；邮件自助找回暂未开放。</p>}
     <Fields fields={fields} values={values} setValues={setValues} />
     {(SECRET_FIELDS[code] || []).filter(([key]) => code !== "email" || key === (values.provider === "api" ? "api_key" : "password")).map(([key, label]) => {
       const stored = objectValue(objectValue(active.secrets)[key]);

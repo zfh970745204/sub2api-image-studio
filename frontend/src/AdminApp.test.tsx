@@ -21,6 +21,31 @@ function mockAdmin(items: AdminRow[], allowed = [...permissions]) {
 describe("administrator configuration workflows", () => {
   beforeEach(() => window.history.replaceState({}, "", "/admin/settings"));
 
+  it("saves the registration switch directly with the configured defaults", async () => {
+    const fetchMock = mockAdmin([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AdminEditor kind="settings" row={{ code: "general", name: "通用设置", active_version: 4, active: { values: { registration_enabled: true, default_membership_code: "free", default_points: 50, max_upload_mb: 20, max_image_megapixels: 40, signed_url_ttl_seconds: 600, task_concurrency: 2 } } }} permissions={permissions} onClose={vi.fn()} onSaved={vi.fn()} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /开放用户注册/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({ base_version: 4, values: { registration_enabled: false, default_points: 50 } });
+  });
+
+  it("keeps dashboard metrics available when only the trend request fails", async () => {
+    window.history.replaceState({}, "", "/admin");
+    const defaults = mockAdmin([], ["admin.dashboard.read"]);
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("dashboard/summary")) return response({ users: { active: 12, registrations: 3 }, jobs: { total: 8, queue_length: 1, success_rate: .75, by_status: {}, failure_reasons: [] }, points: {}, storage: { bytes: 1024, new_asset_count: 2, quarantined: 0, deletion_failures: 0 }, sub2api: { configured: false, requests: 0, success_rate: null }, system: { r2_configured: false, services: {} } });
+      if (url.includes("dashboard/timeseries")) return response({ message: "趋势暂不可用" }, 503);
+      return defaults(url, init);
+    }));
+    render(<AdminApp />);
+    expect(await screen.findByText("12")).toBeInTheDocument();
+    expect(screen.getByText("趋势暂不可用")).toBeInTheDocument();
+    expect(screen.getByText("任务成功率")).toBeInTheDocument();
+  });
+
   it("opens real config fields for a super admin and saves without an approval request", async () => {
     const fetchMock = mockAdmin([configRow]);
     vi.stubGlobal("fetch", fetchMock);
