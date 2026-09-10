@@ -45,20 +45,6 @@
 [data-user-theme="dark"] .user-sidebar nav button { color: var(--user-muted); }
 [data-user-theme="dark"] .user-sidebar nav button:hover { background: var(--user-surface); }
 [data-user-theme="dark"] .user-sidebar nav button.active { color: #f0f6ed; background: #326d53; }
-.admin-sidebar { color: #273d36; background: #f0f2eb; border-color: #dce1d5; }
-.admin-brand strong, .admin-sidebar-footer strong { color: #273d36; }
-.admin-brand small, .admin-sidebar-footer small { color: #758078; }
-.admin-user-copy strong { color: #273d36; }
-.admin-user-copy small { color: #758078; }
-.admin-nav button { color: #687568; }
-.admin-nav button svg { color: inherit; }
-.admin-nav button.is-active { color: #fff; background: #28634f; }
-.admin-nav button.is-active svg:first-child { color: inherit; }
-.admin-nav-group-label { color: #8a9487; }
-.admin-sidebar-footer { border-color: #dce1d5; }
-.admin-avatar { color: #28634f; background: #e1e8d8; }
-.admin-boot { min-height: 100dvh; display: flex; justify-content: center; align-items: center; gap: 14px; background: #f6f6f1; }
-.admin-boot .admin-brand-mark { margin: 0; }
 .admin-studio-link { color: var(--admin-accent); }
 .admin-site-link { text-decoration: none; color: var(--admin-muted); font-size: 12px; white-space: nowrap; }
 @media (max-width: 960px) {

@@ -1,0 +1,21 @@
+/* Shared palette for the public site, workspace and administration. */
+:root {
+  --studio-ink: #1b1e23;
+  --studio-muted: #6d737d;
+  --studio-line: #e2e5e9;
+  --studio-soft-line: #edf0f3;
+  --studio-paper: #fff;
+  --studio-surface: #f6f7f9;
+  --studio-canvas: #f2f3f5;
+  --studio-accent: #315efb;
+  --studio-accent-hover: #254bd4;
+  --studio-accent-soft: #edf1ff;
+  --studio-green: #16846b;
+  --studio-green-soft: #e9f8f3;
+  --studio-amber: #9a6500;
+  --studio-amber-soft: #fff7df;
+  --studio-red: #b33c45;
+  --studio-red-soft: #fff0f1;
+  --studio-control-radius: 8px;
+  --studio-panel-radius: 10px;
+}

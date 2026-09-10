@@ -385,6 +385,7 @@ frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if frontend_dist.is_dir():
 
     @app.get("/login", include_in_schema=False)
+    @app.get("/register", include_in_schema=False)
     @app.get("/forgot-password", include_in_schema=False)
     @app.get("/app", include_in_schema=False)
     @app.get("/app/{path:path}", include_in_schema=False)

@@ -134,23 +134,6 @@ body { -webkit-font-smoothing: antialiased; line-height: 1.5; }
 [data-user-theme="dark"] .user-primary { background: #326d53; border-color: #326d53; }
 :root[data-user-theme="dark"]:has(.user-shell) { color-scheme: dark; }
 
-.admin-shell, .admin-login-page, .admin-boot { --admin-accent: #28634f; --admin-accent-soft: #e5eee2; --admin-ink: #273d36; --admin-muted: #758078; --admin-line: #e0e3da; --admin-soft-line: #eceee7; --admin-canvas: #f6f6f1; --admin-surface: #f7f8f3; }
-.admin-boot { position: fixed; inset: 0; width: 100%; min-height: 100dvh; }
-.admin-boot > * { justify-self: center; }
-.admin-sidebar { background: #f0f2eb; border-color: #dce1d5; }
-.admin-nav button { border-radius: 9px; }
-.admin-nav button:hover { background: #e5e9df; }
-.admin-nav button.is-active { background: #28634f; }
-.admin-nav button.is-active svg:first-child { color: #e3eee1; }
-.admin-segmented button.is-active, .admin-tabs button.is-active { background: #365c48; }
-.admin-brand { border-color: #dce1d5; }
-.admin-brand-mark { border-radius: 10px; }
-.admin-panel, .admin-data-panel, .admin-metric-card { border-radius: 14px; }
-.admin-primary-button, .admin-secondary-button { border-radius: 9px; }
-.admin-primary-button:hover { background: #1e4e3e; }
-.admin-page-heading h1 { font-weight: 650; letter-spacing: -.5px; }
-.admin-topbar { background: #ffffffee; }
-
 @media (max-width: 1100px) {
   .user-page { padding-inline: 24px; }
   .user-quick-tools > button { padding: 15px; gap: 10px; }

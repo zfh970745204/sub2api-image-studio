@@ -38,6 +38,10 @@ describe("public landing session and feature navigation", () => {
     act(() => window.dispatchEvent(new Event("pageshow")));
     expect(await screen.findByRole("link", { name: "开始使用" })).toHaveAttribute("href", "/register");
     expect(screen.queryByText("你好，设计师")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "创建账号，开始创作" })).toHaveLength(2);
+    for (const link of screen.getAllByRole("link", { name: "创建账号，开始创作" })) {
+      expect(link).toHaveAttribute("href", "/register");
+    }
   });
 
   it("keeps a direct workspace entry during session lookup failures and switches effect examples with the keyboard", async () => {

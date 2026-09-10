@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import AdminApp from "./AdminApp";
 import UserApp from "./UserApp";
 import { SiteBrandingProvider } from "./SiteBranding";
+import "./theme.css";
 import "./admin.css";
 import "./user-app.css";
 import "./workspace.css";
