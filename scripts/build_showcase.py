@@ -1,9 +1,9 @@
 """Prepare compressed website artwork from the reviewed ImageGen outputs."""
-from pathlib import Path
 import sys
 from io import BytesIO
+from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
@@ -30,6 +30,10 @@ for place in ("login", "register", "home"):
 shirt_path = SOURCE / "shirt-source.webp"
 with Image.open(shirt_path) as img:
     web(img, "shirt-source-v3", 1000)
+    redraw = ImageOps.exif_transpose(img).convert("RGB")
+    redraw = redraw.resize((redraw.width * 2, redraw.height * 2), Image.Resampling.LANCZOS)
+    redraw = redraw.filter(ImageFilter.UnsharpMask(radius=1.25, percent=125, threshold=3))
+    web(redraw, "shirt-redraw-v3", 1200)
 extracted, metadata = finalize_print_extraction((SOURCE / "shirt-extracted-key.png").read_bytes())
 (DEST / "shirt-print-v3.png").write_bytes(extracted)
 with Image.open(BytesIO(extracted)) as img:
@@ -38,4 +42,6 @@ with Image.open(BytesIO(extracted)) as img:
 for filename, name in (("mug-source.jpg", "mug-source-v3"), ("mug-commerce.png", "mug-commerce-v3")):
     with Image.open(SOURCE / filename) as img:
         web(img, name, 1200)
+with Image.open(SOURCE / "home-studio.png") as img:
+    web(img, "ai-generate-v3", 1200)
 print("Website media ready:", DEST)

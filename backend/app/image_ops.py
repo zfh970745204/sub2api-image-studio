@@ -448,6 +448,28 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
     alpha_safe = np.maximum(alpha[:, :, None], 0.04)
     foreground = (pixels - (1 - alpha[:, :, None]) * background_float) / alpha_safe
     foreground = np.where(alpha[:, :, None] > 0.01, foreground, 0)
+
+    # Chroma-key generations can leave pink anti-aliased specks inside light ink.
+    # Repair only this legacy magenta-key path; native-alpha results must remain exact.
+    residual_count = 0
+    if key_mode == "magenta":
+        red, green, blue = np.moveaxis(foreground, -1, 0)
+        residual = (
+            (np.minimum(red, blue) - green > 8)
+            & (alpha > 0.02)
+        )
+        residual_count = int(np.count_nonzero(residual))
+        if residual_count:
+            repair_mask = np.uint8(residual) * 255
+            repaired = np.empty_like(foreground, dtype=np.uint8)
+            for channel in range(3):
+                repaired[:, :, channel] = cv2.inpaint(
+                    np.uint8(np.clip(foreground[:, :, channel], 0, 255)),
+                    repair_mask,
+                    3,
+                    cv2.INPAINT_TELEA,
+                )
+            foreground = repaired.astype(np.float32)
     rgba = np.dstack([np.clip(foreground, 0, 255).astype(np.uint8), np.uint8(alpha * 255)])
 
     output = BytesIO()
@@ -456,6 +478,7 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
         "method": "solid-background-to-alpha",
         "estimated_background_color": [int(value) for value in background],
         "key_mode": key_mode,
+        "key_color_residual_pixels": residual_count,
         "color_preservation": "opaque-foreground-unchanged-v2",
     }
 

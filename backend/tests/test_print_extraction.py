@@ -4,6 +4,7 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import httpx
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 from sqlalchemy import select
@@ -47,6 +48,25 @@ def test_extraction_rejects_opaque_background_and_empty_artwork():
         finalize_print_extraction(print_image((220, 220, 220, 255)))
     with pytest.raises(ImageInputError, match="未提取到有效印花"):
         finalize_print_extraction(_blank_green())
+
+
+def test_magenta_key_residuals_are_repaired_without_changing_alpha():
+    image = Image.new("RGBA", (128, 128), (255, 0, 255, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 30, 98, 96), fill=(255, 255, 255, 255))
+    for x, y in ((42, 42), (56, 58), (78, 74), (90, 88)):
+        draw.point((x, y), fill=(255, 85, 255, 255))
+    raw = BytesIO()
+    image.save(raw, format="PNG")
+
+    result, metadata = finalize_print_extraction(raw.getvalue())
+    with Image.open(BytesIO(result)) as output:
+        rgba = np.asarray(output.convert("RGBA"))
+        red, green, blue, alpha = np.moveaxis(rgba, -1, 0)
+        magenta = (np.minimum(red.astype(int), blue.astype(int)) - green.astype(int) > 8) & (alpha > 20)
+        assert not np.any(magenta)
+        assert output.getpixel((42, 42))[3] == 255
+    assert metadata["key_color_residual_pixels"] >= 4
 
 
 def _blank_green():

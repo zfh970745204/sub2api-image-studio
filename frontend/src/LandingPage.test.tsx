@@ -50,5 +50,13 @@ describe("public landing session and feature navigation", () => {
     expect(screen.getByRole("tab", { name: "电商主图" })).toHaveFocus();
     expect(within(screen.getByRole("tabpanel")).getByRole("img", { name: "电商主图" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "试试电商主图" })).toHaveAttribute("href", "/app/studio?tool=ai.ecommerce");
+    fireEvent.click(screen.getByRole("tab", { name: "高清重绘" }));
+    expect(within(screen.getByRole("tabpanel")).getByRole("img", { name: "高清重绘结果" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "AI 生图" }));
+    expect(within(screen.getByRole("tabpanel")).getByRole("img", { name: "AI 生成结果" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "印花提取" }));
+    const extractionPanel = within(screen.getByRole("tabpanel"));
+    expect(extractionPanel.getByRole("img", { name: "真实 T 恤原图" })).toHaveAttribute("src", "/brand/shirt-source-v3-small.webp");
+    expect(extractionPanel.getByRole("img", { name: "透明印花 PNG" })).toHaveAttribute("srcset", "/brand/shirt-print-v3-small.webp 640w, /brand/shirt-print-v3.png 1200w");
   });
 });

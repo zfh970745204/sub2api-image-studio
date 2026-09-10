@@ -6,13 +6,18 @@ import { api, ApiError, type UserSummary } from "./user-api";
 const demos = [
   { name: "印花提取", icon: ScanLine, title: "好设计，不必困在产品里。", description: "从衣服、杯子、帆布袋等产品图片中还原平面图案，保留设计与色彩，输出透明 PNG。", before: "真实 T 恤原图", after: "透明印花 PNG", beforeImage: "/brand/shirt-source-v3.webp", afterImage: "/brand/shirt-print-v3.png", tool: "ai.extract_print" },
   { name: "电商主图", icon: Layers3, title: "同一件产品，形成一整组主图。", description: "从真实产品照片生成干净的商品展示图，保持产品外观、印花与材质在每一张图里一致。", before: "真实杯子原图", after: "电商主图", beforeImage: "/brand/mug-source-v3.webp", afterImage: "/brand/mug-commerce-v3.webp", tool: "ai.ecommerce" },
-  { name: "高清重绘", icon: WandSparkles, title: "熟悉的设计，更清晰的细节。", description: "修复模糊和边缘锯齿，提升原图清晰度。保留主体、背景和构图，继续打磨已有作品。", before: "原始产品照片", after: "高清重绘结果", beforeImage: "/brand/mug-source-v3.webp", afterImage: "/brand/mug-commerce-v3.webp", tool: "ai.redraw" },
+  { name: "高清重绘", icon: WandSparkles, title: "熟悉的设计，更清晰的细节。", description: "修复模糊和边缘锯齿，提升原图清晰度。保留主体、背景和构图，继续打磨已有作品。", before: "原始 T 恤照片", after: "高清重绘结果", beforeImage: "/brand/shirt-source-v3.webp", afterImage: "/brand/shirt-redraw-v3.webp", tool: "ai.redraw" },
+  { name: "AI 生图", icon: Sparkles, title: "从一句描述，得到完整画面。", description: "输入画面描述，或加入参考图片，让 AI 生成可直接继续编辑的产品视觉。", before: "文字描述", after: "AI 生成结果", beforeImage: "", afterImage: "/brand/ai-generate-v3.webp", tool: "ai.generate", prompt: "高级 POD 产品摄影，象牙色卫衣、陶瓷杯与同款印花，冷灰工作室背景，真实材质与柔和侧光。" },
 ];
 
 function DemoArt({ mode, result = false }: { mode: number; result?: boolean }) {
   const item = demos[mode];
+  if (!result && mode === 3) {
+    return <div className="landing-prompt-art"><small>TEXT PROMPT</small><p>{item.prompt}</p><span>AI IMAGE · 1024 × 1024</span></div>;
+  }
   const src = result ? item.afterImage : item.beforeImage;
-  return <div className={`landing-demo-art ${result && mode === 0 ? "checker" : ""}`}><img src={src} alt={result ? item.after : item.before} loading="lazy" /></div>;
+  const smallSrc = src.replace(/\.(?:png|jpe?g|webp)$/i, "-small.webp");
+  return <div className={`landing-demo-art ${result && mode === 0 ? "checker" : ""}`}><img src={smallSrc} srcSet={`${smallSrc} 640w, ${src} 1200w`} sizes="(max-width: 760px) 44vw, (max-width: 1100px) 28vw, 30vw" alt={result ? item.after : item.before} loading="lazy" decoding="async" /></div>;
 }
 
 export function LandingPage() {
