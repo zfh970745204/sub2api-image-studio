@@ -229,6 +229,7 @@ export function estimatedPoints(operation: Operation | undefined, parameters: Re
 }
 
 export const api = {
+  currentUser: () => request<{ user: UserSummary }>("/api/v1/auth/me"),
   authOptions: () => request<{ registration_enabled: boolean }>("/api/v1/auth/options"),
   sendRegistrationCode: (email: string) => request<{ status: string; retry_after_seconds: number; expires_in_seconds: number }>("/api/v1/auth/register/email-code", {
     method: "POST", body: JSON.stringify({ email }),

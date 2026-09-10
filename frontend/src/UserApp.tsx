@@ -81,6 +81,7 @@ import {
 import { MaskCanvas, type MaskCanvasHandle } from "./MaskCanvas";
 import { ComparisonPreview } from "./ComparisonPreview";
 import { ToastMessage } from "./Toast";
+import { LandingPage } from "./LandingPage";
 
 type AppRoute = "home" | "studio" | "assets" | "jobs" | "points" | "membership" | "profile";
 
@@ -220,21 +221,6 @@ function UserApp() {
   if (pathname === "/login") return <LoginPage />;
   if (pathname === "/register") return <RegisterPage />;
   return <ProtectedApp pathname={pathname} />;
-}
-
-function LandingPage() {
-  const branding = useSiteBranding();
-  return (
-    <main className="user-landing-page">
-      <nav className="user-landing-nav"><Brand /><div><button className="user-text-button" onClick={() => navigate("/login")} type="button">登录</button><button className="user-primary compact" onClick={() => navigate("/register")} type="button"><UserRound size={15} />开始创作</button></div></nav>
-      <section className="user-landing-hero">
-        <div className="user-landing-copy"><span className="user-landing-kicker"><i />SUB2IMAGE · CREATIVE WORKBENCH</span><h1>{branding.site_name}<br /><em>让每一处细节成为作品。</em></h1><p>从灵感生成，到产品印花提取、高清重绘与透明 PNG 输出，把图片生产变成一条清晰、可复用的工作流。</p><div className="user-landing-actions"><button className="user-primary" onClick={() => navigate("/register")} type="button"><Sparkles size={17} />免费开始创作<ArrowRight size={16} /></button><button className="user-secondary" onClick={() => navigate("/login")} type="button">登录工作台</button></div><small>生成 · 提取 · 精修 · 版本管理</small></div>
-        <div className="user-landing-visual"><img src={branding.home_image_url} alt="图片创作工作台视觉" fetchPriority="high" /><div className="user-landing-visual-label"><span>01 / VISUAL SYSTEM</span><strong>从产品照片中提取<br />可直接生产的印花。</strong></div></div>
-      </section>
-      <section className="user-landing-features" aria-label="产品能力"><div className="user-landing-feature-intro"><span>WORKFLOW, REFINED</span><h2>为重复的图片工作，<br />建立稳定的方法。</h2></div><article><Sparkles size={21} /><span>01</span><h3>AI 生成</h3><p>把文字描述快速变成可继续编辑的视觉草稿。</p></article><article><FileImage size={21} /><span>02</span><h3>印花提取</h3><p>从衣服、杯子和帆布袋照片还原平面印花，输出透明 PNG。</p></article><article><WandSparkles size={21} /><span>03</span><h3>高清重绘</h3><p>清理模糊、压缩和锯齿，保留原图内容与构图。</p></article></section>
-      <footer className="user-landing-footer"><Brand /><span>一个更安静、更准确的图片生产空间。</span><button className="user-text-button" onClick={() => navigate("/register")} type="button">进入工作台<ArrowRight size={15} /></button></footer>
-    </main>
-  );
 }
 
 function LoginPage() {
@@ -550,6 +536,7 @@ function AppShell({
           })}
         </nav>
         <div className="user-sidebar-foot">
+          <a href="/"><LayoutDashboard size={17} /><span>网站首页</span><ArrowRight size={14} /></a>
           {adminAccess && (
             <a href="/admin"><ShieldCheck size={17} /><span>管理后台</span><ArrowRight size={14} /></a>
           )}
@@ -1061,7 +1048,7 @@ function StudioPage({
   if (!canCreate) return <ForbiddenState title="无权创建图片任务" description="当前账号缺少工作台或任务创建权限。" />;
   return (
     <div className={`user-studio-page${expanded ? " preview-expanded" : ""}`}>
-      <PageHeader eyebrow="IMAGE STUDIO" title="让好图片，更进一步。" description="从一个想法开始，或为已有作品打磨细节。">
+      <PageHeader eyebrow="IMAGE STUDIO" title="图片编辑器" description="选择工具，上传图片，细节交给我们。">
         <button className="user-secondary" onClick={() => navigate("/app/jobs")} type="button"><ListTodo size={17} />任务中心</button>
       </PageHeader>
       <div className="user-studio-layout">
@@ -1108,21 +1095,20 @@ function StudioPage({
           <header><span>创作设置</span><h2>{meta.label}</h2><p>{meta.description}</p></header>
           <fieldset className="user-studio-fields" disabled={Boolean(busy) || jobRunning}>
           {meta.source && (
-            <label className="user-field"><span>来源素材</span><select onChange={(event) => { setSourceId(event.target.value); setResultAsset(null); }} value={sourceId}><option value="">从素材库选择</option>{selectableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></label>
+            <div className="studio-source-picker"><label className="user-field"><span>来源素材</span><select onChange={(event) => { setSourceId(event.target.value); setResultAsset(null); }} value={sourceId}><option value="">从素材库选择</option>{selectableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></label><button className="user-secondary" aria-label={source ? "替换 / 上传图片" : "上传图片"} title={source ? "替换 / 上传图片" : "上传图片"} disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}</button></div>
           )}
-          {meta.source && <button className="user-secondary user-upload-button" disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{source ? "替换 / 上传图片" : "上传图片"}</button>}
           <input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void upload(event.target.files?.[0])} ref={uploadRef} type="file" />
           {(operationCode.startsWith("ai.") || operationCode === "ai.generate") && (
-            <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={5} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
+            <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={3} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
           )}
           {operationCode === "ai.generate" && <label className="user-field"><span>画布尺寸</span><select onChange={(event) => setForm({ ...form, size: event.target.value })} value={form.size}><option value="1024x1024">方形 · 1024 × 1024</option><option value="1024x1536">竖版 · 1024 × 1536</option><option value="1536x1024">横版 · 1536 × 1024</option><option value="auto">自动</option></select></label>}
           {(operationCode.startsWith("ai.")) && <Segmented label="生成质量" value={form.quality} options={[["medium", `标准 · ${estimatedPoints(selectedOperation, { quality: "medium" }) ?? "--"} 积分`], ["high", `精细 · ${estimatedPoints(selectedOperation, { quality: "high" }) ?? "--"} 积分`]]} onChange={(value) => setForm({ ...form, quality: value })} />}
           {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
-          {operationCode === "ai.extract_print" && <p className="user-mask-hint">适合衣服、杯子、帆布袋等产品照片。还原平面印花、修复褶皱和透视，保留原设计、文字与色彩。输出透明 PNG。印花较小时，先裁切到图案附近，效果更稳定。</p>}
-          {operationCode === "ai.redraw" && <p className="user-mask-hint">只提升清晰度、修复模糊与锯齿，保留主体、背景与构图。需要去除衣服或杯子并提取图案，请使用“印花提取”。</p>}
-          {resultAsset?.has_alpha && <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />}
+          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>适合衣服、杯子、帆布袋等产品照片。还原平面印花、修复褶皱和透视，保留原设计、文字与色彩，输出透明 PNG。先裁切到图案附近，效果更稳定。</p></details>}
+          {operationCode === "ai.redraw" && <details className="studio-tool-help"><summary>高清重绘与印花提取的区别</summary><p>重绘只提升清晰度，保留主体、背景与构图。需要去除产品、单独还原图案，请使用“印花提取”。</p></details>}
+          {resultAsset?.has_alpha && <details className="studio-tool-help"><summary>预览背景（不影响导出）</summary><PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} /></details>}
           </fieldset>
           <div className="user-studio-submit">
           <div className="user-quote-summary"><span>预计积分</span><strong>{estimatedPoints(selectedOperation, parameters()) ?? "--"}<small>积分</small></strong></div>
@@ -1684,7 +1670,7 @@ function EmptyState({ icon: Icon, title, description, compact = false }: { icon:
 
 function Brand({ inverse = false }: { inverse?: boolean }) {
   const branding = useSiteBranding();
-  return <span className={`user-brand${inverse ? " inverse" : ""}`}><img src={branding.logo_url} width="34" height="34" alt="" /><strong>{branding.site_name}</strong></span>;
+  return <a href="/" aria-label={`${branding.site_name} · 网站首页`} className={`user-brand${inverse ? " inverse" : ""}`}><img src={branding.logo_url} width="34" height="34" alt="" /><strong>{branding.site_name}</strong></a>;
 }
 
 function BrandArtwork({ place, className }: { place: "login" | "register" | "home"; className: string }) {

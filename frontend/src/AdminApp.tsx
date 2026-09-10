@@ -571,6 +571,7 @@ function AdminApp() {
             window.history.pushState({}, "", href);
             setModule(currentModule());
           }} />
+          <a className="admin-site-link" href="/">网站首页</a>
           <a className="admin-studio-link" href="/app">
             <Images size={16} />
             <span>返回工作台</span>
@@ -653,7 +654,7 @@ function AdminLogin({ onSuccess, error: initialError }: { onSuccess: () => Promi
             登录
           </button>
         </form>
-        <a href="/">返回图片工作台</a>
+        <a href="/app">返回图片工作台</a>
       </section>
     </div>
   );

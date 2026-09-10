@@ -7,6 +7,9 @@ import "./admin.css";
 import "./user-app.css";
 import "./workspace.css";
 import "./experience.css";
+import "./design.css";
+import "./editor.css";
+import "./landing.css";
 
 const RootApp = window.location.pathname.startsWith("/admin") ? AdminApp : UserApp;
 
