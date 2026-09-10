@@ -735,7 +735,10 @@ async def test_batch_job_download_is_owner_scoped_and_contains_all_outputs(
         assert downloaded.status_code == 200, downloaded.text
         with zipfile.ZipFile(BytesIO(downloaded.content)) as bundle:
             assert bundle.namelist() == ["image-01.png", "image-02.png"]
-            assert [bundle.read(name) for name in bundle.namelist()] == [prepared.data, prepared.data]
+            assert [bundle.read(name) for name in bundle.namelist()] == [
+                prepared.data,
+                prepared.data,
+            ]
         assert (await stranger_client.get(f"/api/v1/jobs/{job_id}/download")).status_code == 404
 
 

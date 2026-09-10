@@ -269,7 +269,14 @@ class AssetService:
             if asset is None or asset.source_job_id != job_id:
                 return False
             job = await session.get(ImageJob, job_id)
-            if job is None or job.status != "succeeded" or (job.output_asset_id != asset.id and str(asset.id) not in (job.output_asset_ids or [])):
+            if (
+                job is None
+                or job.status != "succeeded"
+                or (
+                    job.output_asset_id != asset.id
+                    and str(asset.id) not in (job.output_asset_ids or [])
+                )
+            ):
                 return False
             if asset.status == "ready":
                 return True
@@ -605,7 +612,10 @@ class AssetService:
                     or (
                         source_job is not None
                         and source_job.status == "succeeded"
-                        and (source_job.output_asset_id == asset.id or str(asset.id) in (source_job.output_asset_ids or []))
+                        and (
+                            source_job.output_asset_id == asset.id
+                            or str(asset.id) in (source_job.output_asset_ids or [])
+                        )
                     )
                 ):
                     asset.status = "ready"

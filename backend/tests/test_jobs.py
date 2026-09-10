@@ -160,7 +160,12 @@ async def quote(
 ) -> dict:
     response = await client.post(
         "/api/v1/jobs/quote",
-        json={"operation_code": operation_code, "parameters": parameters if parameters is not None else ({"prompt": "test image"} if operation_code == "ai.generate" else {})},
+        json={
+            "operation_code": operation_code,
+            "parameters": parameters
+            if parameters is not None
+            else ({"prompt": "test image"} if operation_code == "ai.generate" else {}),
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()["quote"]
@@ -176,7 +181,12 @@ async def create_job(
     return await client.post(
         "/api/v1/jobs",
         headers={"Idempotency-Key": key},
-        json={"quote_id": job_quote["id"], "parameters": parameters if parameters is not None else ({"prompt": "test image"} if job_quote["operation_code"] == "ai.generate" else {})},
+        json={
+            "quote_id": job_quote["id"],
+            "parameters": parameters
+            if parameters is not None
+            else ({"prompt": "test image"} if job_quote["operation_code"] == "ai.generate" else {}),
+        },
     )
 
 

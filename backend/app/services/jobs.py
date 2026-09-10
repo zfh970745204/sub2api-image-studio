@@ -163,7 +163,9 @@ class JobService:
         if operation is None or not operation.enabled:
             raise ApiError(404, "OPERATION_NOT_AVAILABLE", "图片操作不存在或已停用")
         await self._validate_source_asset(session, source_asset_id=source_asset_id, user_id=user_id)
-        count = await self._validate_generation(session, operation_code, canonical, source_asset_id, user_id)
+        count = await self._validate_generation(
+            session, operation_code, canonical, source_asset_id, user_id
+        )
         price = await self.current_price(session, operation.id, now=current_time)
         entitlement = await self.entitlements.current_snapshot(
             session, user_id, now=current_time, request_id=request_id
@@ -266,7 +268,9 @@ class JobService:
         await self._validate_source_asset(
             session, source_asset_id=quote.source_asset_id, user_id=user_id
         )
-        await self._validate_generation(session, quote.operation_code, canonical, quote.source_asset_id, user_id)
+        await self._validate_generation(
+            session, quote.operation_code, canonical, quote.source_asset_id, user_id
+        )
         operation = (
             await session.scalars(
                 select(OperationCatalog).where(OperationCatalog.code == quote.operation_code)
@@ -516,7 +520,10 @@ class JobService:
             .values(
                 status="succeeded",
                 output_asset_id=output_asset_id,
-                output_asset_ids=[str(item) for item in (output_asset_ids or ([output_asset_id] if output_asset_id else []))],
+                output_asset_ids=[
+                    str(item)
+                    for item in (output_asset_ids or ([output_asset_id] if output_asset_id else []))
+                ],
                 progress=100,
                 completed_at=current_time,
                 worker_id=None,
@@ -1220,22 +1227,39 @@ class JobService:
         except (ValueError, TypeError) as exc:
             raise ApiError(422, "INVALID_REFERENCE_ASSETS", "参考图标识无效") from exc
         if len(set(ids)) != len(ids) or (source_id and ids and ids[0] != source_id):
-            raise ApiError(422, "INVALID_REFERENCE_ASSETS", "首张参考图必须与来源素材一致，且不能重复")
+            raise ApiError(
+                422, "INVALID_REFERENCE_ASSETS", "首张参考图必须与来源素材一致，且不能重复"
+            )
         for asset_id in set(ids + ([source_id] if source_id else [])):
             asset = await session.get(Asset, asset_id)
             if asset is None or asset.owner_id != user_id or asset.status != "ready":
                 raise ApiError(404, "REFERENCE_ASSET_NOT_FOUND", "参考图不存在或已不可用")
-            if asset.mime_type not in {"image/png", "image/jpeg", "image/webp"} or asset.kind in {"mask", "thumbnail"}:
-                raise ApiError(422, "INVALID_REFERENCE_ASSETS", "参考图必须是 PNG、JPEG 或 WebP 图片")
+            if asset.mime_type not in {"image/png", "image/jpeg", "image/webp"} or asset.kind in {
+                "mask",
+                "thumbnail",
+            }:
+                raise ApiError(
+                    422, "INVALID_REFERENCE_ASSETS", "参考图必须是 PNG、JPEG 或 WebP 图片"
+                )
         prompt = parameters.get("prompt", "")
-        if code == "ai.ecommerce" and (not isinstance(prompt, str) or (not prompt.strip() and not ids and not source_id)):
+        if code == "ai.ecommerce" and (
+            not isinstance(prompt, str) or (not prompt.strip() and not ids and not source_id)
+        ):
             raise ApiError(422, "INVALID_OPERATION_PARAMETERS", "请描述图片内容或提供参考图")
-        if parameters.get("size", "1024x1024") not in {"auto", "1024x1024", "1024x1536", "1536x1024"}:
+        if parameters.get("size", "1024x1024") not in {
+            "auto",
+            "1024x1024",
+            "1024x1536",
+            "1536x1024",
+        }:
             raise ApiError(422, "INVALID_OPERATION_PARAMETERS", "画布尺寸无效")
         count = parameters.get("image_count", 1)
         if type(count) is not int or not 1 <= count <= (8 if code == "ai.ecommerce" else 1):
             raise ApiError(422, "INVALID_IMAGE_COUNT", "电商主图每次支持 1–8 张，AI 生成每次 1 张")
-        if code == "ai.ecommerce" and parameters.get("platform", "amazon") not in ECOMMERCE_PLATFORMS:
+        if (
+            code == "ai.ecommerce"
+            and parameters.get("platform", "amazon") not in ECOMMERCE_PLATFORMS
+        ):
             raise ApiError(422, "INVALID_PLATFORM", "请选择支持的电商平台")
         return count
 

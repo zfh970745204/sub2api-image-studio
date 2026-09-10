@@ -264,7 +264,9 @@ def _execution_result(value: Any) -> JobExecutionResult:
         output_asset_id = value.get("output_asset_id")
         return JobExecutionResult(
             output_asset_id=uuid.UUID(str(output_asset_id)) if output_asset_id else None,
-            output_asset_ids=tuple(uuid.UUID(str(item)) for item in value.get("output_asset_ids", [])),
+            output_asset_ids=tuple(
+                uuid.UUID(str(item)) for item in value.get("output_asset_ids", [])
+            ),
             provider_request_id=value.get("provider_request_id"),
             metrics=dict(value.get("metrics") or {}),
         )

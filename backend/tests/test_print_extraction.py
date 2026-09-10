@@ -63,7 +63,9 @@ def test_magenta_key_residuals_are_repaired_without_changing_alpha():
     with Image.open(BytesIO(result)) as output:
         rgba = np.asarray(output.convert("RGBA"))
         red, green, blue, alpha = np.moveaxis(rgba, -1, 0)
-        magenta = (np.minimum(red.astype(int), blue.astype(int)) - green.astype(int) > 8) & (alpha > 20)
+        magenta = (np.minimum(red.astype(int), blue.astype(int)) - green.astype(int) > 8) & (
+            alpha > 20
+        )
         assert not np.any(magenta)
         assert output.getpixel((42, 42))[3] == 255
     assert metadata["key_color_residual_pixels"] >= 4

@@ -73,7 +73,10 @@ class Sub2APIClient:
         }
         images = [image_png, *(reference_images or [])]
         field = "image[]" if len(images) > 1 else "image"
-        files = [(field, ("image.png" if len(images) == 1 else f"image-{index}.png", value, "image/png")) for index, value in enumerate(images)]
+        files = [
+            (field, ("image.png" if len(images) == 1 else f"image-{index}.png", value, "image/png"))
+            for index, value in enumerate(images)
+        ]
         if mask_png is not None:
             files.append(("mask", ("mask.png", mask_png, "image/png")))
         response = await self._request("POST", "/images/edits", data=data, files=files)

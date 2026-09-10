@@ -454,10 +454,17 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
     residual_count = 0
     if key_mode == "magenta":
         red, green, blue = np.moveaxis(foreground, -1, 0)
-        residual = (
-            (np.minimum(red, blue) - green > 8)
-            & (alpha > 0.02)
+        light_ink = np.min(foreground, axis=2) >= 180
+        near_light_ink = cv2.dilate(light_ink.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+        candidates = (np.minimum(red, blue) - green > 8) & (alpha > 0.02) & near_light_ink
+        component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            candidates.astype(np.uint8), connectivity=8
         )
+        maximum_speck_area = max(4, round(image.shape[0] * image.shape[1] * 0.001))
+        residual = np.zeros_like(candidates)
+        for label in range(1, component_count):
+            if stats[label, cv2.CC_STAT_AREA] <= maximum_speck_area:
+                residual |= labels == label
         residual_count = int(np.count_nonzero(residual))
         if residual_count:
             repair_mask = np.uint8(residual) * 255

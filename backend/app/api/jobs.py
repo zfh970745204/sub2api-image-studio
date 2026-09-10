@@ -209,7 +209,8 @@ def job_payload(job: ImageJob) -> dict[str, Any]:
         "operation_code": job.operation_code,
         "source_asset_id": job.source_asset_id,
         "output_asset_id": job.output_asset_id,
-        "output_asset_ids": job.output_asset_ids or ([str(job.output_asset_id)] if job.output_asset_id else []),
+        "output_asset_ids": job.output_asset_ids
+        or ([str(job.output_asset_id)] if job.output_asset_id else []),
         "quote_id": job.quote_id,
         "status": job.status,
         "refund_status": job.refund_status,
@@ -477,7 +478,9 @@ async def get_my_job(
     return {"job": job_payload(job)}
 
 
-@router.get("/api/v1/jobs/{job_id}/download", dependencies=[Depends(require_permission("assets.read_own"))])
+@router.get(
+    "/api/v1/jobs/{job_id}/download", dependencies=[Depends(require_permission("assets.read_own"))]
+)
 async def download_job_results(job_id: uuid.UUID, request: Request, principal: JobOwnerReader):
     runtime = request.app.state.runtime_services
     async with runtime.database.session_factory() as session:
@@ -485,7 +488,12 @@ async def download_job_results(job_id: uuid.UUID, request: Request, principal: J
         ids = job.output_asset_ids or ([str(job.output_asset_id)] if job.output_asset_id else [])
         if job.status != "succeeded" or not ids:
             raise ApiError(409, "JOB_RESULTS_NOT_READY", "任务结果尚未就绪")
-        assets = [await AssetService().require_usable(session, uuid.UUID(value), owner_id=principal.user_id) for value in ids]
+        assets = [
+            await AssetService().require_usable(
+                session, uuid.UUID(value), owner_id=principal.user_id
+            )
+            for value in ids
+        ]
     # The response generator owns and closes this file after the client has read it.
     archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)  # noqa: SIM115
     try:
@@ -497,7 +505,9 @@ async def download_job_results(job_id: uuid.UUID, request: Request, principal: J
     except BaseException as exc:
         archive.close()
         if isinstance(exc, ObjectStorageError):
-            raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "结果下载暂不可用，请稍后重试") from exc
+            raise ApiError(
+                503, "OBJECT_STORAGE_UNAVAILABLE", "结果下载暂不可用，请稍后重试"
+            ) from exc
         raise
 
     def chunks():
@@ -507,7 +517,14 @@ async def download_job_results(job_id: uuid.UUID, request: Request, principal: J
         finally:
             archive.close()
 
-    return StreamingResponse(chunks(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="studio-{job_id}.zip"', "Cache-Control": "private, no-store"})
+    return StreamingResponse(
+        chunks(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="studio-{job_id}.zip"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.post("/api/v1/jobs/{job_id}/cancel")

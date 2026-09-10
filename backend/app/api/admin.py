@@ -1033,7 +1033,9 @@ async def save_view(
     return {"saved_view": _saved_view_payload(item)}
 
 
-@router.delete("/saved-views/{view_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+@router.delete(
+    "/saved-views/{view_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
+)
 async def delete_saved_view(
     view_id: uuid.UUID,
     request: Request,
