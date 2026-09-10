@@ -418,7 +418,18 @@ class ImageJobExecutor:
             transient = (
                 exc.status_code in {402, 408, 425, 429}
                 or exc.status_code >= 500
-                or any(word in message for word in ("quota", "rate limit", "ratelimit", "credit", "balance", "insufficient", "limit reached"))
+                or any(
+                    word in message
+                    for word in (
+                        "quota",
+                        "rate limit",
+                        "ratelimit",
+                        "credit",
+                        "balance",
+                        "insufficient",
+                        "limit reached",
+                    )
+                )
             )
             if transient:
                 if breaker.failed():

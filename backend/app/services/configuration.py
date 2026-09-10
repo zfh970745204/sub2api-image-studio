@@ -67,7 +67,9 @@ class StrictValues(BaseModel):
 
 
 class Sub2APIProfile(StrictValues):
-    id: str = Field(default="primary", min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    id: str = Field(
+        default="primary", min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$"
+    )
     name: str = Field(default="主线路", min_length=1, max_length=80)
     enabled: bool = True
     priority: int = Field(default=1, ge=1, le=10000)
@@ -125,8 +127,10 @@ class Sub2APIValues(StrictValues):
 
     @model_validator(mode="after")
     def require_url_when_enabled(self) -> Sub2APIValues:
-        if self.enabled and not self.base_url and not any(
-            profile.enabled and profile.base_url for profile in self.profiles
+        if (
+            self.enabled
+            and not self.base_url
+            and not any(profile.enabled and profile.base_url for profile in self.profiles)
         ):
             raise ValueError("启用 Sub2API 前必须填写至少一条接口地址")
         identifiers = [profile.id for profile in self.profiles]
@@ -565,9 +569,7 @@ class ConfigService:
         secret_names = set(definition.secret_keys)
         if code == "sub2api":
             secret_names.update(
-                row.key_name
-                for row in by_key.values()
-                if row.key_name.startswith("api_key_")
+                row.key_name for row in by_key.values() if row.key_name.startswith("api_key_")
             )
         return {
             "id": version.id,
@@ -1063,7 +1065,9 @@ class ConfigConnectionTester:
             if config.group == "sub2api":
                 profiles = sub2api_profile_settings(config)
                 if not profiles:
-                    return self._outcome(started, False, "SUB2API_NOT_CONFIGURED", "没有可用的 Sub2API 线路")
+                    return self._outcome(
+                        started, False, "SUB2API_NOT_CONFIGURED", "没有可用的 Sub2API 线路"
+                    )
                 for profile in profiles:
                     await Sub2APIClient(profile).list_models()
             elif config.group == "r2":
@@ -1094,11 +1098,17 @@ class ConfigConnectionTester:
             return self._outcome(started, False, "PROFILE_NOT_SUPPORTED", "该配置组不支持线路测试")
         try:
             profile = next(
-                (item for item in sub2api_profile_settings(config) if item.profile_id == profile_id),
+                (
+                    item
+                    for item in sub2api_profile_settings(config)
+                    if item.profile_id == profile_id
+                ),
                 None,
             )
             if profile is None:
-                return self._outcome(started, False, "SUB2API_PROFILE_NOT_CONFIGURED", "线路未启用或密钥尚未设置")
+                return self._outcome(
+                    started, False, "SUB2API_PROFILE_NOT_CONFIGURED", "线路未启用或密钥尚未设置"
+                )
             await Sub2APIClient(profile).list_models()
         except Exception as exc:  # noqa: BLE001
             return self._outcome(
