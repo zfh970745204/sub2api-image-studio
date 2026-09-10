@@ -329,6 +329,10 @@ class PointService:
             created_at=now,
         )
         session.add(transaction)
+        # Callers assign this ID to job/adjustment foreign keys. Persist the ledger
+        # entry first: scalar FK assignments alone do not order ORM mapper flushes.
+        # This is still the caller's transaction; a later failure rolls it all back.
+        await session.flush()
         self._record_transaction_event(session, transaction, request_id=request_id)
         return transaction, True
 

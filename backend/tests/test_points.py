@@ -8,7 +8,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 
 from app.api.auth import router as auth_router
 from app.api.errors import ApiError, install_exception_handlers
@@ -50,6 +50,11 @@ async def point_context(tmp_path) -> PointContext:
         POINT_ADJUSTMENT_APPROVAL_THRESHOLD=1000,
     )
     database = Database(database_url)
+
+    @event.listens_for(database.engine.sync_engine, "connect")
+    def enforce_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
     async with database.engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     auth_service = AuthService(settings)

@@ -25,6 +25,8 @@ import {
   LogIn,
   LogOut,
   Menu,
+  Maximize2,
+  Minimize2,
   MonitorSmartphone,
   Moon,
   MoreHorizontal,
@@ -70,6 +72,7 @@ import {
   type SessionInfo,
   type UserNotification,
 } from "./user-api";
+import { MaskCanvas, type MaskCanvasHandle } from "./MaskCanvas";
 
 type AppRoute = "home" | "studio" | "assets" | "jobs" | "points" | "membership" | "profile";
 
@@ -172,6 +175,9 @@ function routeFromPath(path: string): AppRoute {
 }
 
 function messageOf(reason: unknown, fallback = "请求失败，请稍后重试"): string {
+  if (reason instanceof ApiError && reason.status >= 500 && reason.requestId) {
+    return `${reason.message}（请求编号：${reason.requestId}）`;
+  }
   return reason instanceof Error ? reason.message : fallback;
 }
 
@@ -194,6 +200,7 @@ function formatBytes(value: number): string {
 }
 
 function operationName(code: string): string {
+  if (code === "upload") return "上传原图";
   return OPERATION_META[code]?.label || code;
 }
 
@@ -449,6 +456,7 @@ function AppShell({
       <section className="user-main">
         <header className="user-topbar">
           <div className="user-topbar-leading">
+            <span className="user-breadcrumb">工作空间 <span>/</span> <strong>{NAV_ITEMS.find((item) => item.id === route)?.label}</strong></span>
             <button aria-label="打开导航" className="user-icon-button mobile-only" onClick={() => setMobileNav(true)} title="打开导航" type="button"><Menu size={20} /></button>
             <span className="user-mobile-brand"><Brand /></span>
           </div>
@@ -539,8 +547,8 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
   useEffect(() => {
     Promise.all([api.jobs(), api.assets()])
       .then(([jobPayload, assetPayload]) => {
-        setJobs(jobPayload.items.slice(0, 5));
-        setAssets(assetPayload.items.slice(0, 6));
+        setJobs(jobPayload.items);
+        setAssets(assetPayload.items);
       })
       .catch((reason) => setError(messageOf(reason)));
   }, []);
@@ -548,12 +556,19 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
   const activeJobs = jobs?.filter((item) => ["queued", "running", "retry_wait"].includes(item.status)).length || 0;
   return (
     <>
-      <PageHeader eyebrow="工作台概览" title={`你好，${bootstrap.user.display_name}`} description="继续最近的图片工作，或创建新的生产任务。">
+      <PageHeader eyebrow="YOUR WORKSPACE" title={`你好，${bootstrap.user.display_name}`} description="灵感、素材与作品，都在这里。">
         <button className="user-primary" onClick={() => navigate("/app/studio")} type="button"><Plus size={17} />新建图片任务</button>
       </PageHeader>
+      <section className="user-creative-hero">
+        <div><span><Sparkles size={15} />为每一个好想法，留出空间</span><h2>从灵感，到作品。<br /><em>只差一次创作。</em></h2><p>生成、精修、抠图、放大。把繁琐交给工具，把专注留给创意。</p><button className="user-primary" onClick={() => navigate("/app/studio?tool=ai.generate")} type="button">开始新的创作<ArrowRight size={17} /></button></div>
+        <div className="user-hero-art" aria-hidden="true"><div className="user-art-sheet back" /><div className="user-art-sheet front"><div className="user-art-sun" /><div className="user-art-hill one" /><div className="user-art-hill two" /><span>MAKE ROOM<br />FOR IDEAS.</span><small>STUDIO / 001</small></div><div className="user-art-badge"><Sparkles size={17} />无限灵感</div></div>
+      </section>
+      <section className="user-quick-tools" aria-label="快捷创作">
+        {(["ai.generate", "cutout.smart", "upscale.2x"] as const).map((code) => { const item = OPERATION_META[code]; const Icon = item.icon; return <button key={code} onClick={() => navigate(`/app/studio?tool=${code}`)} type="button"><span><Icon size={22} /></span><div><strong>{item.label}</strong><small>{item.description}</small></div><ArrowRight size={17} /></button>; })}
+      </section>
       <section className="user-stat-strip" aria-label="账户概览">
         <button onClick={() => navigate("/app/points")} type="button"><span><Coins size={18} />可用积分</span><strong>{bootstrap.points.balance.toLocaleString("zh-CN")}</strong><small>累计消费 {bootstrap.points.lifetime_spent.toLocaleString("zh-CN")}</small></button>
-        <button onClick={() => navigate("/app/jobs")} type="button"><span><Clock3 size={18} />进行中任务</span><strong>{activeJobs}</strong><small>离开编辑器后仍会继续处理</small></button>
+        <button onClick={() => navigate("/app/jobs")} type="button"><span><Clock3 size={18} />进行中任务</span><strong>{activeJobs}</strong><small>最近 100 条任务中的进行项</small></button>
         <button onClick={() => navigate("/app/assets")} type="button"><span><Images size={18} />最近素材</span><strong>{assets?.length ?? "--"}</strong><small>结果自动进入素材库</small></button>
         <button onClick={() => navigate("/app/membership")} type="button"><span><BadgeCheck size={18} />当前会员</span><strong>{bootstrap.membership.plan.name}</strong><small>{bootstrap.membership.ends_at ? `有效至 ${dateTime(bootstrap.membership.ends_at)}` : "长期有效"}</small></button>
       </section>
@@ -563,7 +578,7 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
           <SectionHeader icon={ListTodo} title="最近任务" action={<button onClick={() => navigate("/app/jobs")} type="button">查看全部<ArrowRight size={15} /></button>} />
           {!jobs ? <MiniLoading /> : jobs.length === 0 ? <EmptyState icon={ListTodo} title="还没有图片任务" description="从编辑器提交后，任务进度会在这里持续更新。" compact /> : (
             <div className="user-compact-list">
-              {jobs.map((job) => <JobRow job={job} key={job.id} />)}
+              {jobs.slice(0, 5).map((job) => <JobRow job={job} key={job.id} />)}
             </div>
           )}
         </section>
@@ -571,7 +586,7 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
           <SectionHeader icon={Images} title="最近素材" action={<button onClick={() => navigate("/app/assets")} type="button">打开素材库<ArrowRight size={15} /></button>} />
           {!assets ? <MiniLoading /> : assets.length === 0 ? <EmptyState icon={Images} title="素材库为空" description="上传原图或完成一次图片任务即可建立素材版本。" compact /> : (
             <div className="user-recent-assets">
-              {assets.map((asset) => <AssetThumb asset={asset} key={asset.id} onClick={() => navigate(`/app/studio?source=${asset.id}`)} />)}
+              {assets.slice(0, 6).map((asset) => <AssetThumb asset={asset} key={asset.id} onClick={() => navigate(`/app/studio?source=${asset.id}`)} />)}
             </div>
           )}
         </section>
@@ -600,7 +615,7 @@ function StudioPage({
   const [operations, setOperations] = useState<Operation[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [operationCode, setOperationCode] = useState(
-    bootstrap.preferences.studio_layout.last_tool || "ai.redraw",
+    new URLSearchParams(window.location.search).get("tool") || bootstrap.preferences.studio_layout.last_tool || (initialSource ? "ai.redraw" : "ai.generate"),
   );
   const [sourceId, setSourceId] = useState(initialSource || "");
   const [maskId, setMaskId] = useState("");
@@ -613,6 +628,16 @@ function StudioPage({
     maxColors: 6,
   });
   const [quote, setQuote] = useState<Quote | null>(null);
+  const quoteParameters = useRef<Record<string, unknown>>({});
+  const submitting = useRef(false);
+  const brushRef = useRef<MaskCanvasHandle>(null);
+  const [maskRevision, setMaskRevision] = useState(0);
+  const [compareSource, setCompareSource] = useState(false);
+  const [pollError, setPollError] = useState("");
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  const bootstrapRef = useRef(bootstrap);
+  bootstrapRef.current = bootstrap;
   const [busy, setBusy] = useState<"loading" | "upload" | "quote" | "submit" | "mask" | null>("loading");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -632,12 +657,16 @@ function StudioPage({
     try {
       const [operationPayload, assetPayload] = await Promise.all([api.operations(), api.assets()]);
       setOperations(operationPayload.items.filter((item) => item.enabled));
-      setAssets(assetPayload.items);
+      setAssets((current) => [...assetPayload.items, ...current.filter((item) => !assetPayload.items.some((loaded) => loaded.id === item.id))]);
       setOperationCode((current) =>
-        operationPayload.items.some((item) => item.code === current)
+        operationPayload.items.some((item) => item.enabled && item.code === current)
           ? current
-          : operationPayload.items[0]?.code || "ai.redraw",
+          : operationPayload.items.find((item) => item.enabled)?.code || "ai.generate",
       );
+      if (initialSource && !assetPayload.items.some((item) => item.id === initialSource)) {
+        const payload = await api.asset(initialSource);
+        setAssets((current) => [payload.asset, ...current]);
+      }
     } catch (reason) {
       setError(messageOf(reason, "无法载入编辑器"));
     } finally {
@@ -646,6 +675,12 @@ function StudioPage({
   }, []);
 
   useEffect(() => void loadStudio(), [loadStudio]);
+  useEffect(() => {
+    if (!expanded) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [expanded]);
   useEffect(() => () => {
     if (previewImage) URL.revokeObjectURL(previewImage);
   }, [previewImage]);
@@ -653,38 +688,99 @@ function StudioPage({
   const selectedOperation = operations.find((item) => item.code === operationCode);
   const meta = OPERATION_META[operationCode] || OPERATION_META["ai.redraw"];
   const source = assets.find((item) => item.id === sourceId) || null;
-  const displayAsset = resultAsset || source;
-  const displayUrl = useSignedAssetUrl(displayAsset?.id || null);
+  const displayAsset = compareSource ? source : resultAsset || (meta.source ? source : null);
+  const displayUrl = useSignedAssetUrl(displayAsset?.id || null, previewRevision, (reason) => setError(messageOf(reason, "预览地址获取失败")));
   const needsMask = operationCode === "ai.repair" || operationCode === "ai.text_fix";
   const canCreate = bootstrap.permissions.includes("studio.use") && bootstrap.permissions.includes("tasks.create");
   const maintenance = bootstrap.service.status !== "ok";
   const providerUnavailable =
     selectedOperation?.engine_type === "sub2api" &&
     !bootstrap.service.features.sub2api_configured;
+  const jobRunning = Boolean(activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status));
+  const selectableAssets = assets.filter((item) => item.status === "ready" && !["mask", "thumbnail", "vector"].includes(item.kind));
+
+  function refreshBalance() {
+    void api.pointBalance().then(({ account }) => onBootstrap({ ...bootstrapRef.current, points: account })).catch(() => undefined);
+  }
 
   useEffect(() => {
+    setMaskId("");
+    setMaskRevision(0);
+    setQuote(null);
+    setCompareSource(false);
+  }, [sourceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const jobId = sessionStorage.getItem(`studio-job:${bootstrap.user.id}`);
+      if (jobId) void api.job(jobId).then(async ({ job }) => {
+        if (cancelled) return;
+        setActiveJob(job);
+        setOperationCode(job.operation_code);
+        setSourceId(job.source_asset_id || "");
+        setForm((current) => ({
+          ...current,
+          prompt: String(job.parameters.prompt || job.parameters.instruction || ""),
+          size: String(job.parameters.size || current.size),
+          quality: String(job.parameters.quality || current.quality),
+        }));
+        if (job.source_asset_id) {
+          const { asset } = await api.asset(job.source_asset_id);
+          if (!cancelled) setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
+        }
+      }).catch(() => undefined);
+    } catch { /* Storage may be disabled by the browser. */ }
+    return () => { cancelled = true; };
+  }, [bootstrap.user.id]);
+
+  useEffect(() => {
+    let cancelled = false;
     if (!displayAsset) {
       setLineage([]);
       return;
     }
-    api.lineage(displayAsset.id).then((payload) => setLineage(payload.items)).catch(() => setLineage([displayAsset]));
+    api.lineage(displayAsset.id).then((payload) => { if (!cancelled) setLineage(payload.items); }).catch(() => { if (!cancelled) setLineage([displayAsset]); });
+    return () => { cancelled = true; };
   }, [displayAsset?.id]);
 
   useEffect(() => {
-    if (!activeJob || !["queued", "running", "retry_wait"].includes(activeJob.status)) return;
-    const timer = window.setInterval(() => {
-      api.jobEvents(activeJob.id).then(async (payload) => {
-        setActiveJob(payload.job);
-        if (payload.job.status === "succeeded" && payload.job.output_asset_id) {
-          const assetPayload = await api.asset(payload.job.output_asset_id);
-          setResultAsset(assetPayload.asset);
-          setAssets((current) => [assetPayload.asset, ...current.filter((item) => item.id !== assetPayload.asset.id)]);
-          setNotice("任务已完成，新结果已加入素材库和版本链。 ");
+    if (!activeJob) return;
+    const jobId = activeJob.id;
+    let cancelled = false;
+    let timer: number;
+    async function poll() {
+      try {
+        const { job, next_poll_after_ms } = await api.jobEvents(jobId);
+        if (cancelled) return;
+        // Results are published after the completion transaction. Retry retrieval
+        // until available instead of stopping forever at the first 404/503.
+        if (job.status === "succeeded" && job.output_asset_id) {
+          const { asset } = await api.asset(job.output_asset_id);
+          if (cancelled) return;
+          setResultAsset(asset);
+          setCompareSource(false);
+          setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
+          setNotice("");
         }
-      }).catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [activeJob?.id, activeJob?.status]);
+        setActiveJob(job);
+        setPollError("");
+        if (["queued", "running", "retry_wait"].includes(job.status)) {
+          timer = window.setTimeout(poll, Math.max(1000, next_poll_after_ms || 2000));
+        } else {
+          setNotice("");
+          refreshBalance();
+          try { sessionStorage.removeItem(`studio-job:${bootstrap.user.id}`); } catch { /* Optional storage. */ }
+        }
+      } catch (reason) {
+        if (cancelled) return;
+        setPollError(`暂时无法获取任务或结果，正在自动重试。${messageOf(reason)}`);
+        timer = window.setTimeout(poll, 4000);
+      }
+    }
+    void poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activeJob?.id]);
 
   function parameters(): Record<string, unknown> {
     if (operationCode === "ai.generate") {
@@ -704,6 +800,11 @@ function StudioPage({
 
   async function upload(file?: File) {
     if (!file) return;
+    if (busy || jobRunning) return;
+    if (file.size > bootstrap.membership.entitlements.max_upload_mb * 1024 * 1024) {
+      setError(`图片超过当前会员 ${bootstrap.membership.entitlements.max_upload_mb} MB 上传限制。`);
+      return;
+    }
     setBusy("upload");
     setError("");
     try {
@@ -711,6 +812,7 @@ function StudioPage({
       setAssets((current) => [payload.asset, ...current]);
       setSourceId(payload.asset.id);
       setResultAsset(null);
+      if (!meta.source) selectOperation("ai.redraw");
       setNotice("原图已安全上传到素材库。 ");
     } catch (reason) {
       setError(messageOf(reason, "上传失败"));
@@ -726,6 +828,7 @@ function StudioPage({
     setError("");
     try {
       const payload = await api.uploadAsset(file, "mask");
+      if (payload.asset.width !== source?.width || payload.asset.height !== source?.height) throw new Error("遮罩尺寸必须与来源图片一致，请重新选择。");
       setMaskId(payload.asset.id);
       setNotice("修复遮罩已上传。 ");
     } catch (reason) {
@@ -747,13 +850,23 @@ function StudioPage({
       setError("请先上传或选择一个来源素材。");
       return;
     }
-    if (needsMask && !maskId) {
-      setError("局部修复和文字修正需要先上传黑白遮罩图。");
+    if (operationCode === "ai.text_fix" && !form.prompt.trim()) {
+      setError("请输入需要替换的正确文字。");
       return;
     }
     setBusy("quote");
     try {
-      const payload = await api.quote(operationCode, meta.source ? sourceId : null, parameters());
+      let selectedMaskId = maskId;
+      if (needsMask && !selectedMaskId) {
+        const file = await brushRef.current?.exportMask();
+        if (!file) throw new Error("请在图片上涂抹需要修改的区域，或上传透明 PNG 遮罩。");
+        const { asset } = await api.uploadAsset(file, "mask");
+        selectedMaskId = asset.id;
+        setMaskId(asset.id);
+      }
+      const snapshot = { ...parameters(), ...(needsMask ? { mask_asset_id: selectedMaskId } : {}) };
+      const payload = await api.quote(operationCode, meta.source ? sourceId : null, snapshot);
+      quoteParameters.current = snapshot;
       setQuote(payload.quote);
     } catch (reason) {
       setError(messageOf(reason, "无法获取任务报价"));
@@ -763,23 +876,23 @@ function StudioPage({
   }
 
   async function submitJob() {
-    if (!quote) return;
+    if (!quote || submitting.current) return;
+    submitting.current = true;
     setBusy("submit");
     setError("");
     try {
-      const payload = await api.createJob(quote.id, parameters());
+      const payload = await api.createJob(quote.id, quoteParameters.current);
       setActiveJob(payload.job);
       setQuote(null);
       setResultAsset(null);
+      try { sessionStorage.setItem(`studio-job:${bootstrap.user.id}`, payload.job.id); } catch { /* Optional storage. */ }
       setNotice(payload.dispatched ? "任务已进入处理队列，可继续浏览其他页面。" : "任务已保存，调度器将尽快处理。 ");
-      onBootstrap({
-        ...bootstrap,
-        points: { ...bootstrap.points, balance: Math.max(0, bootstrap.points.balance - payload.job.charged_points) },
-      });
+      refreshBalance();
     } catch (reason) {
-      setQuote(null);
+      if (reason instanceof ApiError && ["JOB_QUOTE_EXPIRED", "JOB_QUOTE_ALREADY_USED", "JOB_QUOTE_MISMATCH"].includes(reason.code)) setQuote(null);
       setError(messageOf(reason, "任务提交失败"));
     } finally {
+      submitting.current = false;
       setBusy(null);
     }
   }
@@ -788,6 +901,10 @@ function StudioPage({
     setOperationCode(code);
     setQuote(null);
     setError("");
+    setNotice("");
+    setResultAsset(null);
+    setCompareSource(false);
+    if (!jobRunning) setActiveJob(null);
     api.updatePreferences({ studio_layout: { last_tool: code } }).catch(() => undefined);
   }
 
@@ -806,8 +923,8 @@ function StudioPage({
 
   if (!canCreate) return <ForbiddenState title="无权创建图片任务" description="当前账号缺少工作台或任务创建权限。" />;
   return (
-    <div className="user-studio-page">
-      <PageHeader eyebrow="图片编辑器" title="图片生产台" description="选择工具、确认报价并提交异步任务；离开页面不会中断处理。">
+    <div className={`user-studio-page${expanded ? " preview-expanded" : ""}`}>
+      <PageHeader eyebrow="IMAGE STUDIO" title="让好图片，更进一步。" description="从一个想法开始，或为已有作品打磨细节。">
         <button className="user-secondary" onClick={() => navigate("/app/jobs")} type="button"><ListTodo size={17} />任务中心</button>
       </PageHeader>
       <div className="user-studio-layout">
@@ -815,55 +932,72 @@ function StudioPage({
           {operations.map((operation) => {
             const item = OPERATION_META[operation.code] || { label: operation.name, icon: Settings2 };
             const Icon = item.icon;
-            return <button aria-label={item.label} className={operationCode === operation.code ? "active" : ""} key={operation.code} onClick={() => selectOperation(operation.code)} title={`${item.label} · 预计 ${operation.member_base_points ?? operation.current_price?.base_points ?? 0} 积分起`} type="button"><Icon size={19} /><span>{item.label}</span></button>;
+            return <button aria-label={item.label} aria-pressed={operationCode === operation.code} disabled={Boolean(busy) || jobRunning} className={operationCode === operation.code ? "active" : ""} key={operation.code} onClick={() => selectOperation(operation.code)} title={`${item.label} · 预计 ${operation.member_base_points ?? operation.current_price?.base_points ?? 0} 积分起`} type="button"><Icon size={19} /><span>{item.label}</span></button>;
           })}
         </nav>
         <section className="user-canvas-column">
           <header className="user-canvas-head">
-            <span><strong>{resultAsset ? "处理结果" : source ? "来源素材" : "画布"}</strong>{displayAsset && <small>{displayAsset.width} × {displayAsset.height} · {formatBytes(displayAsset.size_bytes)}</small>}</span>
-            {resultAsset && <button className="user-secondary compact" onClick={() => void downloadAsset(resultAsset.id)} type="button"><Download size={16} />下载</button>}
+            <span><FileImage size={17} /><strong>{resultAsset && !compareSource ? "处理结果" : displayAsset ? "来源素材" : "创作预览"}</strong>{displayAsset && <small>{displayAsset.width} × {displayAsset.height}</small>}</span>
+            <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{displayAsset && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
+            {resultAsset && <div className="user-canvas-actions">{source && <button className="user-secondary compact" aria-pressed={compareSource} onClick={() => setCompareSource((value) => !value)} type="button"><Eye size={16} />{compareSource ? "查看结果" : "对比原图"}</button>}<button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button></div>}
           </header>
-          <div className={`user-canvas preview-${previewMode}`} style={previewStyle}>
-            {displayAsset && displayUrl ? <img alt={resultAsset ? "图片任务结果" : "来源素材预览"} src={displayUrl} /> : busy === "loading" ? <MiniLoading /> : (
-              <button className="user-canvas-empty" onClick={() => uploadRef.current?.click()} type="button"><span><Upload size={26} /></span><strong>上传图片开始处理</strong><small>PNG、JPEG 或 WebP</small></button>
+          <div className={`user-canvas preview-${previewMode}${displayAsset ? " has-image" : ""}`} style={previewStyle}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => { event.preventDefault(); void upload(event.dataTransfer.files[0]); }}>
+            {displayAsset && displayUrl ? <div className="user-image-stage" style={{ aspectRatio: `${displayAsset.width || 1} / ${displayAsset.height || 1}`, width: `min(100%, ${(displayAsset.width || 1) / (displayAsset.height || 1)} * 100cqh)` }}>
+              <img alt={resultAsset && !compareSource ? "图片任务结果" : "来源素材预览"} src={displayUrl} onError={() => setError("图片预览加载失败，可尝试重新载入预览或下载图片。")}/>
+              {needsMask && !resultAsset && source?.width && source?.height && <MaskCanvas key={`${sourceId}:${maskRevision}`} ref={brushRef} disabled={Boolean(busy) || jobRunning} width={source.width} height={source.height} onChange={() => { setMaskId(""); setQuote(null); }} />}
+            </div> : busy === "loading" || displayAsset ? <MiniLoading /> : operationCode === "ai.generate" ? (
+              <div className="user-canvas-empty generation"><span><Sparkles size={32} /></span><small>YOUR NEXT CREATION</small><strong>把想象，变成看得见的作品</strong><p>在右侧写下你的想法，<br />选择尺寸与质量，即可开始创作。</p><div className="user-prompt-examples">{["极简植物线稿，米白背景，适合装饰画", "复古山脉与落日，丝网印刷风格"].map((prompt) => <button key={prompt} onClick={() => setForm({ ...form, prompt })} type="button">{prompt}<ArrowRight size={14} /></button>)}</div></div>
+            ) : (
+              <button className="user-canvas-empty" disabled={Boolean(busy) || jobRunning} onClick={() => uploadRef.current?.click()} type="button"><span><ImagePlus size={32} /></span><strong>放入图片，开始创作</strong><p>拖拽图片到这里，或点击上传</p><small>PNG / JPEG / WebP · 最大 {bootstrap.membership.entitlements.max_upload_mb} MB</small></button>
             )}
             {activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status) && (
               <div className="user-job-progress" role="status"><span><LoaderCircle className="spin" size={17} /><strong>{JOB_STATUS[activeJob.status]?.label}</strong></span><div><i style={{ width: `${Math.max(4, activeJob.progress)}%` }} /></div><em>{activeJob.progress}%</em></div>
             )}
           </div>
-          {(error || notice) && <InlineMessage tone={error ? "error" : "success"}>{error || notice}</InlineMessage>}
+          <div className="user-canvas-foot"><span>{needsMask && !resultAsset ? "紫色涂抹区域将被修改，其他区域保留" : "原图始终保留 · 每次处理生成独立版本"}</span>{resultAsset && resultAsset.kind !== "vector" && <button disabled={Boolean(busy)} onClick={() => { setSourceId(resultAsset.id); setResultAsset(null); setActiveJob(null); selectOperation("ai.redraw"); }} type="button">用这张图继续编辑<ArrowRight size={14} /></button>}</div>
+          {error && !quote && <InlineMessage tone="error">{error}</InlineMessage>}
+          {notice && !error && <InlineMessage tone="success">{notice}</InlineMessage>}
+          {pollError && <InlineMessage tone="warning">{pollError}</InlineMessage>}
           {activeJob && !["queued", "running", "retry_wait"].includes(activeJob.status) && activeJob.status !== "succeeded" && (
             <InlineMessage tone="error">{activeJob.error_message || "任务未能完成"}{activeJob.refund_status === "refunded" ? "，已退回本次积分。" : "。"}</InlineMessage>
           )}
           {lineage.length > 0 && (
             <section className="user-version-strip">
               <header><History size={16} /><strong>版本链</strong><span>{lineage.length}</span></header>
-              <div>{lineage.map((asset, index) => <AssetThumb asset={asset} key={asset.id} label={`V${index + 1}`} onClick={() => { setSourceId(asset.id); setResultAsset(null); }} />)}</div>
+              <div>{lineage.map((asset, index) => <AssetThumb asset={asset} key={asset.id} label={`V${index + 1}`} onClick={() => { if (busy || jobRunning || asset.kind === "vector") return; setSourceId(asset.id); setResultAsset(null); }} />)}</div>
             </section>
           )}
         </section>
         <aside className="user-studio-controls">
-          <header><span>当前工具</span><h2>{meta.label}</h2><p>{meta.description}</p></header>
+          <header><span>创作设置</span><h2>{meta.label}</h2><p>{meta.description}</p></header>
+          <fieldset className="user-studio-fields" disabled={Boolean(busy) || jobRunning}>
           {meta.source && (
-            <label className="user-field"><span>来源素材</span><select onChange={(event) => { setSourceId(event.target.value); setResultAsset(null); }} value={sourceId}><option value="">选择素材</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></label>
+            <label className="user-field"><span>来源素材</span><select onChange={(event) => { setSourceId(event.target.value); setResultAsset(null); }} value={sourceId}><option value="">从素材库选择</option>{selectableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></label>
           )}
-          <button className="user-secondary user-upload-button" disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{source ? "上传另一张图片" : "上传图片"}</button>
+          {meta.source && <button className="user-secondary user-upload-button" disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}{source ? "替换 / 上传图片" : "上传图片"}</button>}
           <input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void upload(event.target.files?.[0])} ref={uploadRef} type="file" />
           {(operationCode.startsWith("ai.") || operationCode === "ai.generate") && (
             <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={5} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
           )}
           {operationCode === "ai.generate" && <label className="user-field"><span>画布尺寸</span><select onChange={(event) => setForm({ ...form, size: event.target.value })} value={form.size}><option value="1024x1024">方形 · 1024 × 1024</option><option value="1024x1536">竖版 · 1024 × 1536</option><option value="1536x1024">横版 · 1536 × 1024</option><option value="auto">自动</option></select></label>}
           {(operationCode.startsWith("ai.")) && <Segmented label="生成质量" value={form.quality} options={[["medium", "标准"], ["high", "精细"]]} onChange={(value) => setForm({ ...form, quality: value })} />}
-          {needsMask && <div className="user-field"><span>黑白遮罩</span><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪" : "上传遮罩图"}</button><input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void uploadMask(event.target.files?.[0])} ref={maskRef} type="file" /></div>}
+          {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
           {operationCode === "cutout.smart" && resultAsset?.has_alpha && <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />}
+          </fieldset>
+          <div className="user-studio-submit">
           <div className="user-quote-summary"><span>预计积分</span><strong>{selectedOperation?.member_base_points ?? selectedOperation?.current_price?.base_points ?? "--"}<small>起</small></strong></div>
-          <button className="user-primary user-submit-operation" disabled={Boolean(busy) || maintenance || providerUnavailable} onClick={() => void prepareQuote()} type="button">{busy === "quote" ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}获取报价并提交</button>
+          <button className="user-primary user-submit-operation" disabled={Boolean(busy) || jobRunning || !selectedOperation || maintenance || providerUnavailable} onClick={() => void prepareQuote()} type="button">{busy === "quote" || jobRunning ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}{jobRunning ? "正在处理图片" : busy === "quote" ? "正在计算报价" : "开始创作"}<ArrowRight size={16} /></button>
+          <small className="user-submit-note">确认报价后扣费 · 失败自动退还积分</small>
           {(maintenance || providerUnavailable) && <small className="user-maintenance-note">{maintenance ? "服务维护期间暂不接受新任务" : "AI 图片服务尚未配置"}</small>}
+          {!selectedOperation && !busy && <small className="user-maintenance-note">没有可用工具，请检查后台的功能定价配置。</small>}
+          </div>
         </aside>
       </div>
-      {quote && <QuoteDialog balance={bootstrap.points.balance} busy={busy === "submit"} operation={selectedOperation} quote={quote} onCancel={() => setQuote(null)} onConfirm={() => void submitJob()} />}
+      {quote && <QuoteDialog balance={bootstrap.points.balance} busy={busy === "submit"} error={error} operation={selectedOperation} quote={quote} onCancel={() => { if (!submitting.current) setQuote(null); }} onConfirm={() => void submitJob()} />}
     </div>
   );
 }
@@ -1292,6 +1426,7 @@ function ProfilePage({
 function QuoteDialog({
   balance,
   busy,
+  error,
   operation,
   quote,
   onCancel,
@@ -1299,6 +1434,7 @@ function QuoteDialog({
 }: {
   balance: number;
   busy: boolean;
+  error?: string;
   operation?: Operation;
   quote: Quote;
   onCancel: () => void;
@@ -1308,11 +1444,12 @@ function QuoteDialog({
   return (
     <div className="user-modal-layer" role="presentation">
       <section aria-labelledby="quote-title" aria-modal="true" className="user-modal" role="dialog">
-        <header><span><small>提交前确认</small><h2 id="quote-title">任务报价</h2></span><button aria-label="关闭报价" onClick={onCancel} title="关闭" type="button"><X size={19} /></button></header>
+        <header><span><small>提交前确认</small><h2 id="quote-title">任务报价</h2></span><button aria-label="关闭报价" disabled={busy} onClick={onCancel} title="关闭" type="button"><X size={19} /></button></header>
         <div className="user-quote-operation"><span className="user-operation-icon"><Sparkles size={19} /></span><span><strong>{operation?.name || operationName(quote.operation_code)}</strong><small>报价在 {dateTime(quote.expires_at)} 前有效</small></span></div>
         <dl className="user-quote-lines"><div><dt>基础积分</dt><dd>{quote.base_points}</dd></div><div><dt>会员优惠</dt><dd>-{quote.discount_points}</dd></div>{quote.surcharge_points > 0 && <div><dt>参数附加</dt><dd>+{quote.surcharge_points}</dd></div>}<div className="total"><dt>本次需要</dt><dd>{quote.final_points} 积分</dd></div><div><dt>当前余额</dt><dd>{balance} 积分</dd></div></dl>
         {insufficient && <InlineMessage tone="warning">还差 {quote.final_points - balance} 积分，当前无法提交任务。可前往积分流水查看账户变化。</InlineMessage>}
-        <footer><button className="user-secondary" onClick={onCancel} type="button">取消</button>{insufficient ? <button className="user-primary" onClick={() => navigate("/app/points")} type="button"><Coins size={17} />查看积分</button> : <button className="user-primary" disabled={busy} onClick={onConfirm} type="button">{busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}确认提交</button>}</footer>
+        {error && <InlineMessage tone="error">{error}</InlineMessage>}
+        <footer><button className="user-secondary" disabled={busy} onClick={onCancel} type="button">返回编辑</button>{insufficient ? <button className="user-primary" onClick={() => navigate("/app/points")} type="button"><Coins size={17} />查看积分</button> : <button className="user-primary" disabled={busy} onClick={onConfirm} type="button">{busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{error ? "重试提交" : "确认提交"}</button>}</footer>
       </section>
     </div>
   );
@@ -1376,15 +1513,31 @@ function JobRow({ job }: { job: ImageJob }) {
   return <button onClick={() => navigate("/app/jobs")} type="button"><span className="user-operation-icon">{(() => { const Icon = OPERATION_META[job.operation_code]?.icon || FileImage; return <Icon size={17} />; })()}</span><span><strong>{operationName(job.operation_code)}</strong><small>{dateTime(job.created_at)}</small></span><StatusBadge status={job.status} /><ArrowRight size={15} /></button>;
 }
 
-function useSignedAssetUrl(assetId: string | null): string | null {
+function useSignedAssetUrl(assetId: string | null, revision = 0, onError?: (reason: unknown) => void): string | null {
   const [url, setUrl] = useState<string | null>(null);
+  const errorRef = useRef(onError);
+  errorRef.current = onError;
   useEffect(() => {
     let active = true;
+    let timer: number;
     setUrl(null);
     if (!assetId) return;
-    api.downloadUrl(assetId).then((payload) => { if (active) setUrl(payload.url); }).catch(() => { if (active) setUrl(null); });
-    return () => { active = false; };
-  }, [assetId]);
+    const id = assetId;
+    async function refresh() {
+      try {
+        const payload = await api.downloadUrl(id);
+        if (!active) return;
+        setUrl(payload.url);
+        const remaining = Date.parse(payload.expires_at) - Date.now();
+        timer = window.setTimeout(refresh, Math.min(600000, Math.max(10000, (Number.isFinite(remaining) ? remaining : 600000) * .8)));
+      } catch (reason) {
+        if (!active) return;
+        errorRef.current?.(reason);
+      }
+    }
+    void refresh();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [assetId, revision]);
   return url;
 }
 

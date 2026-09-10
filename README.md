@@ -105,6 +105,8 @@ administrator after the first `super_admin` exists.
 本次后台编辑功能无需新增数据库迁移。源码部署需重新构建前端并更新 Web、Worker、Scheduler；
 使用 `docker-compose.server.yml` 的服务器需等包含改动的镜像发布后更新相应镜像标签并重新启动服务。
 
+图片任务报错修复、新版编辑器和对应更新步骤见 [图片任务与编辑器更新](docs/studio-update-2026-09.md)。
+
 For a memory-constrained server that uses Neon PostgreSQL, Cloudflare R2, and an
 existing host Nginx, use `docker-compose.server.yml` instead. Its application image
 is published to GHCR only after the `main` quality workflow succeeds. It starts only

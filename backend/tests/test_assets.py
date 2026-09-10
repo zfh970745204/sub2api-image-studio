@@ -12,7 +12,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.api.assets import router as assets_router
 from app.api.auth import router as auth_router
@@ -146,6 +146,11 @@ async def asset_context(tmp_path) -> AssetContext:
         ASSET_ORPHAN_GRACE_HOURS=0,
     )
     database = Database(database_url)
+
+    @event.listens_for(database.engine.sync_engine, "connect")
+    def enforce_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
     async with database.engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     async with database.session_factory() as session:

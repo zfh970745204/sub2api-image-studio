@@ -776,7 +776,7 @@ class JobService:
                     session, job, reason="任务对账补偿退款", request_id=request_id
                 )
                 refunds_created += 1
-            else:
+            elif refund is not None:
                 job.refund_status = "refunded"
                 job.refund_transaction_id = refund.id
                 job.refunded_at = job.refunded_at or refund.created_at

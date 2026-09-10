@@ -38,6 +38,8 @@ class JsonFormatter(logging.Formatter):
             "operation": getattr(record, "operation", None),
             "duration_ms": getattr(record, "duration_ms", None),
             "status": getattr(record, "status", None),
+            "error_code": getattr(record, "error_code", None),
+            "constraint": getattr(record, "constraint", None),
         }
         if record.exc_info:
             payload["exception"] = sanitize_log_text(self.formatException(record.exc_info))

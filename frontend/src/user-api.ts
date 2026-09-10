@@ -1,11 +1,13 @@
 export class ApiError extends Error {
   status: number;
   code: string;
+  requestId?: string;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, requestId?: string) {
     super(message);
     this.status = status;
     this.code = code;
+    this.requestId = requestId;
   }
 }
 
@@ -19,6 +21,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     const payload = (await response.json().catch(() => ({}))) as {
       code?: string;
       message?: string;
+      request_id?: string;
       detail?: string | { message?: string };
     };
     const detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message;
@@ -26,6 +29,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       response.status,
       payload.code || `HTTP_${response.status}`,
       payload.message || detail || `请求失败（${response.status}）`,
+      payload.request_id,
     );
   }
   if (response.status === 204) return undefined as T;
@@ -252,7 +256,7 @@ export const api = {
   createJob: (quote_id: string, parameters: Record<string, unknown>) =>
     request<{ job: ImageJob; created: boolean; dispatched: boolean }>("/api/v1/jobs", {
       method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
+      headers: { "Idempotency-Key": `studio:${quote_id}` },
       body: JSON.stringify({ quote_id, parameters }),
     }),
   jobs: (status = "") =>

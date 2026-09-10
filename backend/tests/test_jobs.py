@@ -9,7 +9,8 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import router as auth_router
 from app.api.errors import install_exception_handlers
@@ -19,6 +20,7 @@ from app.config import Settings
 from app.domain.ids import uuid7
 from app.repositories.database import Database
 from app.repositories.models import (
+    Asset,
     Base,
     ConfigGroup,
     ConfigVersion,
@@ -63,6 +65,11 @@ async def job_context(tmp_path) -> JobContext:
         ONBOARDING_POINTS=200,
     )
     database = Database(database_url)
+
+    @event.listens_for(database.engine.sync_engine, "connect")
+    def enforce_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
     async with database.engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     auth_service = AuthService(settings)
@@ -171,6 +178,111 @@ async def create_job(
         headers={"Idempotency-Key": key},
         json={"quote_id": job_quote["id"], "parameters": parameters or {}},
     )
+
+
+@pytest.mark.asyncio
+async def test_persistence_failure_rolls_back_charge_and_keeps_quote_retryable(
+    job_context: JobContext, monkeypatch, caplog
+) -> None:
+    user = await seed_user(job_context, email="rollback@example.test")
+    async with client_for(job_context, user_agent="rollback-device") as client:
+        await login(client, user.email)
+        job_quote = await quote(client, "ai.generate")
+
+        def fail_status(*args, **kwargs):
+            raise IntegrityError("test statement", {}, Exception("test constraint failure"))
+
+        with monkeypatch.context() as patch:
+            patch.setattr(JobService, "record_job_status", fail_status)
+            response = await create_job(client, job_quote, key="safe-retry")
+        assert response.status_code == 500
+        assert response.json()["code"] == "IMAGE_JOB_SAVE_FAILED"
+        assert response.json()["request_id"]
+        assert "image job persistence failed" in caplog.text
+        async with job_context.database.session_factory() as session:
+            assert await session.scalar(select(func.count(ImageJob.id))) == 0
+            assert (
+                await session.scalar(
+                    select(PointAccount.balance).where(PointAccount.user_id == user.id)
+                )
+                == 200
+            )
+            assert (
+                await session.scalar(
+                    select(func.count(PointTransaction.id)).where(
+                        PointTransaction.entry_type == "consume"
+                    )
+                )
+                == 0
+            )
+        retried = await create_job(client, job_quote, key="safe-retry")
+        assert retried.status_code == 201, retried.text
+        replay = await create_job(client, job_quote, key="safe-retry")
+        assert replay.json()["job"]["id"] == retried.json()["job"]["id"]
+        assert replay.json()["created"] is False
+
+
+@pytest.mark.asyncio
+async def test_free_job_charge_and_refund_keep_valid_ledger_links(job_context: JobContext) -> None:
+    user = await seed_user(job_context, email="free-job@example.test")
+    async with job_context.database.session_factory() as session:
+        await session.execute(update(OperationPrice).values(base_points=0))
+        await session.commit()
+    async with client_for(job_context, user_agent="free-job-device") as client:
+        await login(client, user.email)
+        job_quote = await quote(client, "ai.generate")
+        created = await create_job(client, job_quote, key="free-job")
+        assert created.status_code == 201, created.text
+        job_id = created.json()["job"]["id"]
+        for _ in range(2):
+            cancelled = await client.post(f"/api/v1/jobs/{job_id}/cancel")
+            assert cancelled.status_code == 200, cancelled.text
+    async with job_context.database.session_factory() as session:
+        job = await session.get(ImageJob, uuid.UUID(job_id))
+        charge = await session.get(PointTransaction, job.charge_transaction_id)
+        refund = await session.get(PointTransaction, job.refund_transaction_id)
+        assert charge.delta == refund.delta == 0
+        assert job.refund_status == "refunded"
+        assert (
+            await session.scalar(
+                select(PointAccount.balance).where(PointAccount.user_id == user.id)
+            )
+            == 200
+        )
+        assert (
+            await session.scalar(
+                select(func.count(PointTransaction.id)).where(
+                    PointTransaction.entry_type == "refund"
+                )
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_missing_charge_reports_mismatch_without_fake_refund(
+    job_context: JobContext,
+) -> None:
+    user = await seed_user(job_context, email="missing-charge@example.test")
+    async with client_for(job_context, user_agent="missing-charge-device") as client:
+        await login(client, user.email)
+        created = await create_job(client, await quote(client, "ai.generate"), key="missing-charge")
+        job_id = uuid.UUID(created.json()["job"]["id"])
+    async with job_context.database.session_factory() as session:
+        job = await session.get(ImageJob, job_id)
+        charge = await session.get(PointTransaction, job.charge_transaction_id)
+        job.charge_transaction_id = None
+        job.status = "failed"
+        await session.flush()
+        await session.delete(charge)
+        await session.flush()
+        result = await job_context.job_service.reconcile_job(
+            session, job_id=job_id, request_id="reconcile-test"
+        )
+        assert result.mismatches == 1
+        assert result.refunds_created == 0
+        assert job.refund_status == "none"
+        await session.rollback()
 
 
 @pytest.mark.asyncio
@@ -383,8 +495,28 @@ async def test_worker_retry_success_timeout_refund_and_late_result_rejection(
             calls += 1
             if calls == 1:
                 raise RetryableJobError("UPSTREAM_BUSY", "上游暂时繁忙")
+            asset_id = uuid7()
+            async with job_context.database.session_factory() as session:
+                session.add(
+                    Asset(
+                        id=asset_id,
+                        owner_id=user.id,
+                        root_asset_id=asset_id,
+                        source_job_id=_claim.job_id,
+                        kind="result",
+                        operation_code="ai.generate",
+                        bucket="test",
+                        object_key=f"test/{asset_id}.png",
+                        mime_type="image/png",
+                        extension="png",
+                        size_bytes=1,
+                        sha256="0" * 64,
+                        status="ready",
+                    )
+                )
+                await session.commit()
             return {
-                "output_asset_id": str(uuid7()),
+                "output_asset_id": str(asset_id),
                 "provider_request_id": "provider-2",
                 "metrics": {"duration_ms": 25},
             }

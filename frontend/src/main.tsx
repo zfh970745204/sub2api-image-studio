@@ -4,6 +4,7 @@ import AdminApp from "./AdminApp";
 import UserApp from "./UserApp";
 import "./admin.css";
 import "./user-app.css";
+import "./workspace.css";
 
 const RootApp = window.location.pathname.startsWith("/admin") ? AdminApp : UserApp;
 

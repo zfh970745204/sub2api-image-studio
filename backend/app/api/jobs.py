@@ -417,7 +417,23 @@ async def create_job(
             raise
         except IntegrityError as exc:
             await session.rollback()
-            raise ApiError(409, "IMAGE_JOB_CONFLICT", "任务状态已变化，请刷新后重试") from exc
+            # Do not mislabel FK/check failures as a user-caused state conflict,
+            # or log the SQL parameters (which may contain image prompts).
+            cause = exc.orig.__cause__ or exc.orig
+            logger.error(
+                "image job persistence failed",
+                extra={
+                    "request_id": request_id(request),
+                    "error_code": getattr(cause, "sqlstate", "integrity_error"),
+                    "constraint": getattr(cause, "constraint_name", None),
+                    "operation": "jobs.create",
+                },
+            )
+            raise ApiError(
+                500,
+                "IMAGE_JOB_SAVE_FAILED",
+                "任务保存失败，本次提交未扣费。请重试；若仍失败，请将请求编号提供给管理员",
+            ) from exc
         await session.refresh(job)
     dispatched = await enqueue_job(request, job) if created else False
     return {"job": job_payload(job), "created": created, "dispatched": dispatched}
