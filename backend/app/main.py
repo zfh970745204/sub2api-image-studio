@@ -25,6 +25,7 @@ from .api.middleware import RequestContextMiddleware
 from .api.points import router as points_router
 from .api.rbac import router as rbac_router
 from .api.security import router as security_router
+from .api.site import router as site_router
 from .api.system import admin_router, public_router, v1_router
 from .config import get_settings
 from .image_ops import (
@@ -103,6 +104,7 @@ app.include_router(v1_router)
 app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(user_app_router)
+app.include_router(site_router)
 app.include_router(admin_users_router)
 app.include_router(admin_router_v1)
 app.include_router(rbac_router)

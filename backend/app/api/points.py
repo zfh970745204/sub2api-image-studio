@@ -137,6 +137,7 @@ async def transaction_page(
     entry_type: str | None = None,
     reference_type: str | None = None,
     order: Literal["asc", "desc"] = "desc",
+    category: str | None = None,
 ) -> tuple[list[PointTransaction], str | None]:
     statement = select(PointTransaction)
     if user_id is not None:
@@ -147,6 +148,16 @@ async def transaction_page(
         statement = statement.where(PointTransaction.entry_type == entry_type)
     if reference_type is not None:
         statement = statement.where(PointTransaction.reference_type == reference_type)
+    if category:
+        categories = {
+            "consume": ["consume"],
+            "refund": ["refund", "reversal"],
+            "grant": ["grant", "renewal", "promotion"],
+            "adjust": ["adjust"],
+        }
+        if category not in categories:
+            raise ApiError(422, "VALIDATION_ERROR", "无效的积分分类")
+        statement = statement.where(PointTransaction.entry_type.in_(categories[category]))
     if cursor is not None:
         anchor = await session.get(PointTransaction, cursor)
         if anchor is None or (user_id is not None and anchor.user_id != user_id):
@@ -233,6 +244,7 @@ async def list_my_transactions(
     request: Request,
     principal: PointsOwner,
     cursor: uuid.UUID | None = None,
+    category: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, Any]:
     database = request.app.state.runtime_services.database
@@ -257,6 +269,7 @@ async def list_my_transactions(
             user_id=principal.user_id,
             cursor=cursor,
             limit=limit,
+            category=category,
         )
     return {
         "items": [transaction_payload(item) for item in items],

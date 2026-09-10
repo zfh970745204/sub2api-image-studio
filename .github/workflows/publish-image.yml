@@ -32,7 +32,6 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest
             type=sha,format=long
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
@@ -58,3 +57,16 @@ jobs:
           docker pull redis:7-alpine
           docker tag redis:7-alpine ghcr.io/${{ github.repository }}:redis-7-alpine
           docker push ghcr.io/${{ github.repository }}:redis-7-alpine
+      - name: Promote verified image to latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          current_sha="$(gh api repos/${{ github.repository }}/commits/main --jq '.sha')"
+          if [ "${current_sha}" != "${BUILT_SHA}" ]; then
+            echo "main 已有更新提交，保留当前 latest，不推广旧镜像。"
+            exit 0
+          fi
+          docker buildx imagetools create \
+            --tag ghcr.io/${{ github.repository }}:latest \
+            ghcr.io/${{ github.repository }}:sha-${BUILT_SHA}

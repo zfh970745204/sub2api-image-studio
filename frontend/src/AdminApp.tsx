@@ -1,3 +1,4 @@
+import { useSiteBranding } from "./SiteBranding";
 import {
   Activity,
   ArrowLeft,
@@ -469,6 +470,7 @@ function currentModule(): ModuleId {
 }
 
 function AdminApp() {
+  const branding = useSiteBranding();
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
   const [module, setModule] = useState<ModuleId>(currentModule);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -521,8 +523,8 @@ function AdminApp() {
       />
       <aside className={`admin-sidebar ${sidebarOpen ? "is-open" : ""}`}>
         <div className="admin-brand">
-          <img className="admin-brand-mark" src="/brand-symbol.svg" alt="" width="34" height="34" />
-          <span><strong>Sub2Image</strong><small>管理后台</small></span>
+          <img className="admin-brand-mark" src={branding.logo_url} alt="" width="34" height="34" />
+          <span><strong>{branding.site_name}</strong><small>管理后台</small></span>
         </div>
         <nav className="admin-nav" aria-label="后台导航">
           {visibleNavigation.map((item) => {
@@ -603,15 +605,17 @@ function AdminApp() {
 }
 
 function AdminBoot() {
+  const branding = useSiteBranding();
   return (
     <div className="admin-boot">
-      <img className="admin-brand-mark" src="/brand-symbol.svg" alt="" width="34" height="34" />
+      <img className="admin-brand-mark" src={branding.logo_url} alt="" width="34" height="34" />
       <RefreshCw className="spin" size={18} />
     </div>
   );
 }
 
 function AdminLogin({ onSuccess, error: initialError }: { onSuccess: () => Promise<void>; error: string }) {
+  const branding = useSiteBranding();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -637,7 +641,7 @@ function AdminLogin({ onSuccess, error: initialError }: { onSuccess: () => Promi
   return (
     <div className="admin-login-page">
       <section className="admin-login-panel">
-        <div className="admin-login-brand"><img className="admin-brand-mark" src="/brand-symbol.svg" alt="" width="34" height="34" /><span><strong>Sub2Image</strong><small>管理后台</small></span></div>
+        <div className="admin-login-brand"><img className="admin-brand-mark" src={branding.logo_url} alt="" width="34" height="34" /><span><strong>{branding.site_name}</strong><small>管理后台</small></span></div>
         <form onSubmit={submit}>
           <h1>管理员登录</h1>
           <label>邮箱或用户名<input autoFocus autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>

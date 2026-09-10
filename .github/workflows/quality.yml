@@ -77,6 +77,7 @@ jobs:
           docker logs sub2image-minio
           exit 1
       - run: python -m alembic -c backend/alembic.ini upgrade head
+      - run: bash deploy/test-update-server.sh
       - shell: pwsh
         run: ./scripts/quality-check.ps1 -Integration
       - uses: actions/upload-artifact@v4

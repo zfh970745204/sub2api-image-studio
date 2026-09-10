@@ -113,8 +113,9 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
     await execute_image_job({"runtime": runtime, "image_job_executor": executor}, str(job_id))
     assert len(calls) == 1
     if operation == "ai.extract_print":
-        assert b"Remove fabric, folds" in calls[0]
-        assert b"Keep white ink white and black ink black" in calls[0]
+        assert b"eye colors, ink hues, saturation, brightness" in calls[0]
+        assert b"Keep white and black ink intact" in calls[0]
+        assert b"Use ONLY a perfectly uniform" in calls[0]
     else:
         assert b"Do not extract artwork" in calls[0]
         assert b"#00FF00" not in calls[0]
@@ -127,7 +128,7 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
             assert job.status == "succeeded"
             output = await session.get(Asset, job.output_asset_id)
             assert output.status == "ready" and output.parent_asset_id == uuid.UUID(source["id"])
-            assert balance == 182
+            assert balance == 200 - quote_response.json()["quote"]["final_points"]
             with Image.open(
                 BytesIO(await asset_context.storage.get_object(output.object_key))
             ) as image:

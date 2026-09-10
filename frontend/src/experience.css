@@ -1,0 +1,51 @@
+/* Brand photography and lightweight browsing. Loaded after workspace rules. */
+.user-creative-hero { min-height: 380px; background: #101725; }
+.user-creative-hero .user-collection-art { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; margin: 0; object-fit: cover; transform: none; opacity: 1; }
+.user-creative-hero > div:first-child { text-shadow: 0 2px 18px #0a122e; }
+.user-auth-context::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: linear-gradient(#080d1b66, transparent 65%, #080d1b33); }
+.user-register-page .user-auth-panel { padding-block: 30px; }
+.user-register-page .user-auth-heading { margin-block: 25px; }
+.user-brand strong, .admin-brand span strong { overflow-wrap: anywhere; }
+.user-brand img, .admin-brand-mark { object-fit: contain; }
+.user-pagination { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-top: 22px; font-size: 12px; color: var(--user-muted); }
+.user-pagination label { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.user-pagination select { border: 1px solid var(--user-line); border-radius: 8px; padding: 8px; background: var(--user-paper); color: var(--user-ink); }
+.user-pagination button { min-height: 36px; }
+.user-job-thumbnail { width: 50px; height: 50px; flex: 0 0 50px; overflow: hidden; border-radius: 9px; border: 1px solid var(--user-line); background: var(--user-surface); display: grid; place-items: center; }
+.user-job-thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.user-job-name { min-width: 0; }
+.user-job-preview-pair { display: flex; gap: 12px; padding: 0 22px 18px; }
+.user-job-preview-pair figure { flex: 1; min-width: 0; margin: 0; text-align: center; color: var(--user-muted); font-size: 12px; }
+.user-job-preview-pair img { width: 100%; height: 150px; object-fit: contain; background: var(--user-surface); border: 1px solid var(--user-line); border-radius: 9px; }
+.user-job-preview-pair figcaption { padding-top: 7px; }
+.user-stage-progress { display: grid; gap: 7px; margin: 12px 16px; font-size: 11px; color: var(--user-muted); flex-shrink: 0; }
+.user-stage-progress > div { position: relative; overflow: hidden; height: 5px; border-radius: 5px; background: var(--user-line); }
+.user-stage-progress i { display: block; height: 100%; background: var(--user-accent); transition: width .65s ease; border-radius: inherit; }
+.user-stage-progress > div.active::after { content: ""; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, #a397df88, transparent); animation: stage-shimmer 1.8s linear infinite; }
+.user-stage-progress small { font-size: 10px; line-height: 1.7; }
+.user-stage-progress.compact { margin: 8px 0 0; font-size: 10px; }
+.user-stage-progress.compact > span { max-width: 150px; }
+@keyframes stage-shimmer { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+.user-version-strip .user-asset-thumb > span { font-size: 9px; padding: 2px 4px; min-height: 0; border-radius: 4px; }
+.user-version-preview { position: fixed; z-index: 1500; pointer-events: none; width: 260px; padding: 10px; border-radius: 12px; background: var(--user-paper, #fff); border: 1px solid var(--user-line, #e4e5ef); box-shadow: 0 12px 45px #13152630; display: grid; gap: 7px; color: var(--user-ink, #252538); }
+.user-version-preview img { width: 238px; height: 224px; object-fit: contain; background: #eff0f4; border-radius: 6px; }
+.user-version-preview strong { font-size: 11px; }
+.user-version-preview small { font-size: 10px; color: #7c7d90; }
+.admin-brand-uploads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-block: 20px; }
+.admin-brand-upload { min-width: 0; display: grid; gap: 8px; }
+.admin-brand-upload img { width: 100%; height: 120px; object-fit: contain; background: #eeeef4; border-radius: 8px; }
+.admin-brand-upload label { font-size: 12px; display: grid; gap: 6px; }
+.admin-brand-upload input { max-width: 100%; font-size: 11px; }
+.admin-brand-upload small { font-size: 11px; line-height: 1.6; color: #78798e; }
+@media (prefers-reduced-motion: reduce) { .user-stage-progress > div.active::after { animation: none; } }
+@media (max-width: 760px) {
+  .user-creative-hero { min-height: 470px; padding: 26px; align-items: start; }
+  .user-creative-hero .user-collection-art { object-position: 72% bottom; height: 240px; top: auto; mask-image: linear-gradient(transparent, black 25%); }
+  .user-creative-hero > div:first-child { width: 100%; }
+  .user-creative-hero h2 { font-size: 27px; }
+  .user-job-thumbnail { width: 42px; height: 42px; flex-basis: 42px; }
+  .user-pagination { gap: 8px; justify-content: center; }
+  .user-pagination label { margin-right: 0; }
+  .user-stage-progress { margin-inline: 10px; }
+  .admin-brand-uploads { grid-template-columns: 1fr; }
+}

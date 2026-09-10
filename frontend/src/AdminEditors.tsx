@@ -59,6 +59,13 @@ function Fields({ fields, values, setValues }: { fields: FieldDefinition[]; valu
 }
 
 const CONFIG_FIELDS: Record<string, FieldDefinition[]> = {
+  branding: [
+    { key: "site_name", label: "网站名称" },
+    { key: "logo_url", label: "Logo 图片地址", hint: "上传图片或填写 HTTPS 地址" },
+    { key: "login_image_url", label: "登录页配图地址" },
+    { key: "register_image_url", label: "注册页配图地址" },
+    { key: "home_image_url", label: "首页配图地址" },
+  ],
   sub2api: [
     { key: "enabled", label: "启用 Sub2API", type: "checkbox" },
     { key: "base_url", label: "接口地址", hint: "例如 https://api.example.com/v1", required: false },
@@ -99,6 +106,17 @@ const SECRET_FIELDS: Record<string, Array<[string, string]>> = {
   general: [],
 };
 
+function SiteImageUpload({ label, url, onUploaded }: { label: string; url: string; onUploaded: (url: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return <div className="admin-brand-upload"><img src={url} alt={`${label}预览`} loading="lazy" /><label>{busy ? "上传中…" : `上传${label}`}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => {
+    const file = event.target.files?.[0]; if (!file) return;
+    event.target.value = ""; setBusy(true); setError("");
+    const body = new FormData(); body.append("image", file);
+    void apiRequest<{ url: string }>("/api/v1/admin/site-media", { method: "POST", body }).then((result) => onUploaded(result.url)).catch((reason: Error) => setError(reason.message)).finally(() => setBusy(false));
+  }} /></label><small>PNG / JPEG / WebP，最大 12 MB。品牌配图公开展示，保存配置后生效。</small>{error && <p role="alert">{error}</p>}</div>;
+}
+
 function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
   const code = String(row.code);
   const active = objectValue(row.active);
@@ -121,16 +139,18 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
   }
   return <EditorForm title={`配置 ${String(row.name)}`} label="保存并生效" onClose={onClose} disabled={testing} onSubmit={async () => {
     await apiRequest(`/api/v1/admin/config/${code}`, { method: "PUT", body: JSON.stringify({ values, secrets: Object.fromEntries(Object.entries(secrets).filter(([, value]) => String(value).trim())), base_version: row.active_version ?? null }) });
+    if (code === "branding") window.dispatchEvent(new Event("site-branding-updated"));
     onSaved("配置已保存并生效");
   }}>
     <p className="admin-editor-note">填写配置后点击“保存并生效”。密钥留空保留原值，保存后可测试连接。</p>
     {code === "general" && <p className="admin-editor-note">公开注册必须先通过邮箱验证码验证。请在“邮件服务”配置发信渠道；验证成功后获得普通用户权限、默认会员和赠送积分。邮件自助找回暂未开放。</p>}
     <Fields fields={fields} values={values} setValues={setValues} />
+    {code === "branding" && <div className="admin-brand-uploads">{[["logo_url", "Logo"], ["login_image_url", "登录页配图"], ["register_image_url", "注册页配图"], ["home_image_url", "首页配图"]].map(([key, label]) => <SiteImageUpload key={key} label={label} url={String(values[key] || "")} onUploaded={(url) => setValues((current) => ({ ...current, [key]: url }))} />)}</div>}
     {(SECRET_FIELDS[code] || []).filter(([key]) => code !== "email" || key === (values.provider === "api" ? "api_key" : "password")).map(([key, label]) => {
       const stored = objectValue(objectValue(active.secrets)[key]);
       return <Field key={key} field={{ key, label, type: "password", hint: stored.has_value ? `已设置（末尾 ${stored.last_four}），留空保留` : "尚未设置" }} value={secrets[key]} onChange={(value) => setSecrets({ ...secrets, [key]: value })} />;
     })}
-    {permissions.has("config.test") && code !== "general" && <div className="admin-editor-section"><button type="button" className="admin-secondary-button" disabled={testing || !row.active_version || dirty} onClick={() => void testConnection()}>{testing ? "正在测试…" : "测试已保存的连接"}</button>{(!row.active_version || dirty) && <small>请先保存当前配置。</small>}{testResult && <p role="status">{testResult}</p>}</div>}
+    {permissions.has("config.test") && !["general", "branding"].includes(code) && <div className="admin-editor-section"><button type="button" className="admin-secondary-button" disabled={testing || !row.active_version || dirty} onClick={() => void testConnection()}>{testing ? "正在测试…" : "测试已保存的连接"}</button>{(!row.active_version || dirty) && <small>请先保存当前配置。</small>}{testResult && <p role="status">{testResult}</p>}</div>}
     <details className="admin-editor-section" onToggle={(event) => { if (event.currentTarget.open && history === null) void apiRequest<{ items: Row[] }>(`/api/v1/admin/config/${code}/history`).then((result) => { setHistory(result.items); setHistoryError(""); }).catch((error: Error) => setHistoryError(error.message)); }}>
       <summary>配置修改历史</summary>{historyError && <p role="alert">{historyError}</p>}{history?.map((item) => <p key={String(item.id)}>v{String(item.version)} · {item.status === "active" ? "当前生效" : item.status === "draft" ? "未发布草稿" : "历史版本"} · {String(item.change_reason)}</p>)}{history?.length === 0 && <p>暂无修改记录</p>}
     </details>
@@ -141,8 +161,18 @@ function PricingEditor({ row, onClose, onSaved }: EditorProps) {
   const current = objectValue(row.current_price);
   const [values, setValues] = useState<Row>({ name: row.name, enabled: row.enabled, timeout_seconds: row.timeout_seconds, max_attempts: row.max_attempts, base_points: current.base_points ?? 0 });
   const [rules, setRules] = useState(JSON.stringify(current.parameter_rules || {}, null, 2));
+  const ai = String(row.code).startsWith("ai.");
+  const existingRules = objectValue(current.parameter_rules).rules as Row[] | undefined;
+  const quality = objectValue(existingRules?.find((rule) => rule.parameter === "quality")?.points);
+  const [standard, setStandard] = useState(Number(quality.medium || 0));
+  const [fine, setFine] = useState(Number(quality.high ?? Math.max(1, Math.ceil(Number(current.base_points || 0) / 2))));
   return <EditorForm title={`设置价格 · ${String(row.name)}`} label="保存价格与开关" onClose={onClose} onSubmit={async () => {
-    await apiRequest(`/api/v1/admin/operations/${encodeURIComponent(String(row.code))}/configuration`, { method: "PUT", body: JSON.stringify({ ...values, parameter_rules: jsonObject(rules, "参数附加计价"), reason: "管理员修改操作价格与配置" }) });
+    const parameterRules = jsonObject(rules, "参数附加计价");
+    if (ai) {
+      if (fine <= standard) throw new Error("精细质量附加积分必须高于标准");
+      parameterRules.rules = [...((parameterRules.rules || []) as Row[]).filter((rule) => rule.parameter !== "quality"), { parameter: "quality", type: "choice", points: { low: Number(quality.low || 0), medium: standard, high: fine, auto: fine } }];
+    }
+    await apiRequest(`/api/v1/admin/operations/${encodeURIComponent(String(row.code))}/configuration`, { method: "PUT", body: JSON.stringify({ ...values, parameter_rules: parameterRules, reason: "管理员修改操作价格与配置" }) });
     onSaved("价格与操作配置已生效");
   }}>
     <p className="admin-editor-note">单价以积分计。会员折扣作用于基础积分，参数附加积分单独计收；新价格适用于新的任务报价。</p>
@@ -152,7 +182,8 @@ function PricingEditor({ row, onClose, onSaved }: EditorProps) {
       { key: "timeout_seconds", label: "任务超时（秒）", type: "number", min: 30, max: 3600 },
       { key: "max_attempts", label: "最多尝试次数", type: "number", min: 1, max: 10 },
     ]} />
-    <details className="admin-editor-section"><summary>高级参数附加计价</summary><Field field={{ key: "rules", label: "参数附加计价（JSON）", type: "textarea", hint: "无附加费用时使用 {}；原有规则会被保留。" }} value={rules} onChange={(value) => setRules(String(value))} /></details>
+    {ai && <div className="admin-editor-grid"><Field field={{ key: "standard", label: "标准质量附加积分", type: "number", min: 0, max: 1000000000 }} value={standard} onChange={(value) => setStandard(Number(value))} /><Field field={{ key: "fine", label: "精细质量附加积分", type: "number", min: standard + 1, max: 1000000000, hint: "实际收费 = 折后基础积分 + 质量附加积分" }} value={fine} onChange={(value) => setFine(Number(value))} /></div>}
+    <details className="admin-editor-section"><summary>高级参数附加计价</summary><Field field={{ key: "rules", label: "参数附加计价（JSON）", type: "textarea", hint: "其他参数规则会保留；质量费用以上方标准与精细设置为准。" }} value={rules} onChange={(value) => setRules(String(value))} /></details>
   </EditorForm>;
 }
 

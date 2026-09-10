@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -19,7 +21,7 @@ from app.repositories.models import (
     ObjectDeletionQueue,
     OutboxEvent,
 )
-from app.services.asset_files import PreparedAsset
+from app.services.asset_files import PreparedAsset, make_thumbnail
 from app.services.security import SecurityService
 
 
@@ -38,6 +40,32 @@ class OrphanScan:
 
 
 class AssetService:
+    @staticmethod
+    def thumbnail_key(object_key: str) -> str:
+        return f"{object_key.rsplit('/', 1)[0]}/preview-v1.webp"
+
+    async def ensure_thumbnail(self, session, storage, *, asset_id, owner_id) -> str:
+        asset = await self.require_usable(session, asset_id, owner_id=owner_id)
+        if asset.extension == "svg":
+            raise ApiError(404, "THUMBNAIL_UNAVAILABLE", "矢量素材使用文件图标预览")
+        key = self.thumbnail_key(asset.object_key)
+        if not asset.asset_metadata.get("thumbnail_ready"):
+            # A row lock prevents concurrent first-view backfills racing deletion.
+            asset = await session.get(Asset, asset_id, with_for_update=True, populate_existing=True)
+            await self.require_usable(session, asset_id, owner_id=owner_id)
+            if not asset.asset_metadata.get("thumbnail_ready"):
+                raw = await storage.get_object(asset.object_key)
+                thumbnail = await asyncio.to_thread(make_thumbnail, raw)
+                await storage.put_object(
+                    key,
+                    thumbnail,
+                    content_type="image/webp",
+                    metadata={"asset-id": str(asset.id), "purpose": "thumbnail"},
+                )
+                asset.asset_metadata = {**asset.asset_metadata, "thumbnail_ready": True}
+                await session.commit()
+        return key
+
     @staticmethod
     def clean_filename(value: str | None) -> str | None:
         if not value:
@@ -153,6 +181,22 @@ class AssetService:
                     await session.commit()
             raise
 
+        thumbnail_ready = False
+        if prepared.extension != "svg" and kind != "thumbnail":
+            try:
+                thumbnail = await asyncio.to_thread(make_thumbnail, prepared.data)
+                await storage.put_object(
+                    self.thumbnail_key(object_key),
+                    thumbnail,
+                    content_type="image/webp",
+                    metadata={"asset-id": str(asset_id), "purpose": "thumbnail"},
+                )
+                thumbnail_ready = True
+            except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).warning(
+                    "thumbnail deferred", extra={"asset_id": str(asset_id)}
+                )
+
         async with database.session_factory() as session:
             stored = await session.get(Asset, asset_id, with_for_update=True)
             if stored is None:
@@ -162,6 +206,7 @@ class AssetService:
                 **stored.asset_metadata,
                 "object_uploaded": True,
                 "pending_job_completion": not publish,
+                "thumbnail_ready": thumbnail_ready,
             }
             stored.updated_at = current_time
             duplicate_count = await session.scalar(
@@ -440,6 +485,7 @@ class AssetService:
             for row in rows:
                 try:
                     await storage.delete_object(row.object_key)
+                    await storage.delete_object(self.thumbnail_key(row.object_key))
                 except ObjectStorageError as exc:
                     row.attempts += 1
                     row.status = "failed"
@@ -456,7 +502,11 @@ class AssetService:
     async def scan_orphans(self, session, storage: ObjectStorage) -> OrphanScan:
         stored_objects = await storage.list_objects("users/")
         assets = list((await session.scalars(select(Asset))).all())
-        database_keys = {asset.object_key for asset in assets}
+        database_keys = {
+            key
+            for asset in assets
+            for key in (asset.object_key, self.thumbnail_key(asset.object_key))
+        }
         storage_keys = {item.key for item in stored_objects}
         return OrphanScan(
             orphan_objects=tuple(item for item in stored_objects if item.key not in database_keys),

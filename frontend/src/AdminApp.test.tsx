@@ -95,7 +95,7 @@ describe("administrator configuration workflows", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/admin/operations/ai.generate/configuration", expect.objectContaining({ method: "PUT" }));
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(body.base_points).toBe(37);
-    expect(body.parameter_rules).toEqual(rules);
+    expect(body.parameter_rules.rules).toEqual([...rules.rules, { parameter: "quality", type: "choice", points: { low: 0, medium: 0, high: 10, auto: 10 } }]);
   });
 
   it("creates a usable active membership plan with correctly converted discount", async () => {

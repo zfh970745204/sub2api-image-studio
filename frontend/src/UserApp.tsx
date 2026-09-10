@@ -1,3 +1,9 @@
+import { createPortal } from "react-dom";
+import { useSiteBranding } from "./SiteBranding";
+import { Pagination, useCursorPage } from "./Pagination";
+import { ImageThumbnail } from "./ImageThumbnail";
+import { JobProgress } from "./JobProgress";
+import { estimatedPoints } from "./user-api";
 import {
   AlertCircle,
   ArrowRight,
@@ -295,7 +301,7 @@ function LoginPage() {
         </button>
       </section>
       <aside className="user-auth-context" aria-label="工作台能力">
-        <img className="user-auth-artwork" src="/studio-atmosphere.svg" alt="银色光谱雕塑，在深色空间中流动交叠" width="1000" height="1200" />
+        <BrandArtwork place="login" className="user-auth-artwork" />
         <div className="user-auth-showcase"><span>SUB2IMAGE / CREATIVE STUDIO</span><h2>让想象成形。<br /><em>让细节出众。</em></h2><p>从第一道灵感，到最后一处精修。<br />你的下一件作品，从这里开始。</p></div>
         <div className="user-auth-caption"><span>01 — LIGHT IN MOTION</span><span>构想 · 提取 · 精修</span></div>
       </aside>
@@ -361,7 +367,7 @@ function RegisterPage() {
       if (reason instanceof ApiError && reason.code === "REGISTRATION_CLOSED") setEnabled(false);
     } finally { submitting.current = false; setBusy(false); }
   }
-  return <main className="user-auth-page compact"><section className="user-auth-panel" aria-labelledby="register-title">
+  return <main className="user-auth-page user-register-page"><section className="user-auth-panel" aria-labelledby="register-title">
     <Brand />
     <div className="user-auth-heading"><span>让创意成为作品</span><h1 id="register-title">创建账号</h1><p>验证你的邮箱，开启图片创作工作台。</p></div>
     {enabled === false ? <InlineMessage tone="warning">管理员已关闭注册，请联系管理员开通账号。</InlineMessage>
@@ -377,7 +383,7 @@ function RegisterPage() {
     {error && <InlineMessage tone="error">{error}</InlineMessage>}
     {error && enabled === null && <button className="user-secondary" onClick={() => setRevision((value) => value + 1)} type="button">重新加载注册状态</button>}
     <button className="user-text-button" onClick={() => navigate("/login")} type="button">已有账号？返回登录<ArrowRight size={15} /></button>
-  </section></main>;
+  </section><aside className="user-auth-context" aria-label="创作空间配图"><BrandArtwork place="register" className="user-auth-artwork" /><div className="user-auth-showcase"><span>YOUR NEXT CHAPTER</span><h2>从一份灵感，<br /><em>开启无限可能。</em></h2><p>为每一次创作，留出想象的空间。</p></div><div className="user-auth-caption"><span>02 — FORM & POSSIBILITY</span><span>灵感 · 成形</span></div></aside></main>;
 }
 
 function ForgotPasswordPage() {
@@ -660,7 +666,7 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
       </PageHeader>
       <section className="user-creative-hero">
         <div><span><i className="user-creative-dot" />A SPACE FOR YOUR NEXT IDEA</span><h2>创意，自有光芒。<br /><em>把想象精雕成作品。</em></h2><p>从图像生成到印花提取，让每一处细节，<br className="wide-only" />都成为你的设计语言。</p><button className="user-primary" onClick={() => navigate("/app/studio?tool=ai.generate")} type="button">开始新的创作<ArrowRight size={17} /></button><small className="user-hero-footnote">你的灵感，你的创作空间。</small></div>
-        <img className="user-collection-art" src="/studio-prism.svg" alt="悬浮玻璃画框中的银色光谱雕塑" width="1200" height="900" />
+        <BrandArtwork place="home" className="user-collection-art" />
       </section>
       <section className="user-quick-tools" aria-label="快捷创作">
         {(["ai.generate", "ai.extract_print", "ai.redraw"] as const).map((code) => { const item = OPERATION_META[code]; const Icon = item.icon; return <button key={code} onClick={() => navigate(`/app/studio?tool=${code}`)} type="button"><span><Icon size={22} /></span><div><strong>{item.label}</strong><small>{item.description}</small></div><ArrowRight size={17} /></button>; })}
@@ -1065,7 +1071,7 @@ function StudioPage({
               <button className="user-canvas-empty" disabled={Boolean(busy) || jobRunning} onClick={() => uploadRef.current?.click()} type="button"><span><ImagePlus size={32} /></span><strong>放入图片，开始创作</strong><p>拖拽图片到这里，或点击上传</p><small>PNG / JPEG / WebP · 最大 {bootstrap.membership.entitlements.max_upload_mb} MB</small></button>
             )} />
             {activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status) && (
-              <div className="user-job-progress" role="status"><span><LoaderCircle className="spin" size={17} /><strong>{JOB_STATUS[activeJob.status]?.label}</strong></span><div><i style={{ width: `${Math.max(4, activeJob.progress)}%` }} /></div><em>{activeJob.progress}%</em></div>
+              <JobProgress job={activeJob} />
             )}
           {(resultAsset || needsMask) && <div className="user-canvas-foot"><span>{needsMask && !resultAsset ? "紫色涂抹区域将被修改，其他区域保留" : "原图保留 · 结果为独立版本"}</span>{resultAsset && resultAsset.kind !== "vector" && <button disabled={Boolean(busy)} onClick={() => { setSourceId(resultAsset.id); setResultAsset(null); setActiveJob(null); selectOperation("ai.redraw"); }} type="button">继续编辑结果<ArrowRight size={14} /></button>}</div>}
           {error && !quote && <InlineMessage tone="error">{error}</InlineMessage>}
@@ -1093,7 +1099,7 @@ function StudioPage({
             <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={5} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
           )}
           {operationCode === "ai.generate" && <label className="user-field"><span>画布尺寸</span><select onChange={(event) => setForm({ ...form, size: event.target.value })} value={form.size}><option value="1024x1024">方形 · 1024 × 1024</option><option value="1024x1536">竖版 · 1024 × 1536</option><option value="1536x1024">横版 · 1536 × 1024</option><option value="auto">自动</option></select></label>}
-          {(operationCode.startsWith("ai.")) && <Segmented label="生成质量" value={form.quality} options={[["medium", "标准"], ["high", "精细"]]} onChange={(value) => setForm({ ...form, quality: value })} />}
+          {(operationCode.startsWith("ai.")) && <Segmented label="生成质量" value={form.quality} options={[["medium", `标准 · ${estimatedPoints(selectedOperation, { quality: "medium" }) ?? "--"} 积分`], ["high", `精细 · ${estimatedPoints(selectedOperation, { quality: "high" }) ?? "--"} 积分`]]} onChange={(value) => setForm({ ...form, quality: value })} />}
           {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
@@ -1102,7 +1108,7 @@ function StudioPage({
           {resultAsset?.has_alpha && <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />}
           </fieldset>
           <div className="user-studio-submit">
-          <div className="user-quote-summary"><span>预计积分</span><strong>{selectedOperation?.member_base_points ?? selectedOperation?.current_price?.base_points ?? "--"}<small>起</small></strong></div>
+          <div className="user-quote-summary"><span>预计积分</span><strong>{estimatedPoints(selectedOperation, parameters()) ?? "--"}<small>积分</small></strong></div>
           <button className="user-primary user-submit-operation" disabled={Boolean(busy) || jobRunning || !selectedOperation || maintenance || providerUnavailable} onClick={() => void prepareQuote()} type="button">{busy === "quote" || jobRunning ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}{jobRunning ? "正在处理图片" : busy === "quote" ? "正在计算报价" : "开始创作"}<ArrowRight size={16} /></button>
           <small className="user-submit-note">确认报价后扣费 · 失败自动退还积分</small>
           {(maintenance || providerUnavailable) && <small className="user-maintenance-note">{maintenance ? "服务维护期间暂不接受新任务" : "AI 图片服务尚未配置"}</small>}
@@ -1117,36 +1123,17 @@ function StudioPage({
 
 function AssetsPage({ bootstrap }: { bootstrap: BootstrapData }) {
   const initialView = bootstrap.preferences.studio_layout.asset_view || "grid";
-  const [items, setItems] = useState<Asset[] | null>(null);
   const [view, setView] = useState<"grid" | "list">(initialView);
   const [kind, setKind] = useState("");
   const [dateFilter, setDateFilter] = useState("");
   const [jobFilter, setJobFilter] = useState("");
   const [versionFilter, setVersionFilter] = useState("");
-  const [error, setError] = useState("");
+  const pager = useCursorPage(JSON.stringify([kind, dateFilter, jobFilter, versionFilter]), (cursor, limit) => api.assets(kind, { cursor, limit, created_day: dateFilter, job_query: jobFilter, root_query: versionFilter }));
+  const { items, error, setError } = pager;
   const [lineage, setLineage] = useState<Asset[] | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Asset | null>(null);
 
-  const load = useCallback(async () => {
-    setError("");
-    setItems(null);
-    try {
-      const payload = await api.assets(kind);
-      setItems(payload.items);
-    } catch (reason) {
-      setError(messageOf(reason, "无法载入素材库"));
-      setItems([]);
-    }
-  }, [kind]);
-
-  useEffect(() => void load(), [load]);
-
-  const filtered = useMemo(() => (items || []).filter((asset) => {
-    if (dateFilter && asset.created_at.slice(0, 10) !== dateFilter) return false;
-    if (jobFilter && !asset.source_job_id?.includes(jobFilter.trim())) return false;
-    if (versionFilter && !asset.root_asset_id.includes(versionFilter.trim())) return false;
-    return true;
-  }), [items, dateFilter, jobFilter, versionFilter]);
+  const filtered = items || [];
 
   function changeView(next: "grid" | "list") {
     setView(next);
@@ -1167,8 +1154,8 @@ function AssetsPage({ bootstrap }: { bootstrap: BootstrapData }) {
     if (!deleteTarget) return;
     try {
       await api.deleteAsset(deleteTarget.id);
-      setItems((current) => current?.filter((item) => item.id !== deleteTarget.id) || []);
       setDeleteTarget(null);
+      await pager.load();
     } catch (reason) {
       setDeleteTarget(null);
       setError(messageOf(reason, "无法删除素材，可能仍有运行任务依赖它"));
@@ -1196,6 +1183,7 @@ function AssetsPage({ bootstrap }: { bootstrap: BootstrapData }) {
           {filtered.map((asset) => <AssetItem asset={asset} key={asset.id} onDelete={() => setDeleteTarget(asset)} onLineage={() => void showLineage(asset)} />)}
         </section>
       )}
+      <Pagination pager={pager} />
       {lineage && <AssetLineageDrawer items={lineage} onClose={() => setLineage(null)} />}
       {deleteTarget && <ConfirmDialog title="删除素材" description={`删除“${deleteTarget.original_filename || operationName(deleteTarget.operation_code)}”后将进入回收期。运行中任务依赖的素材不能删除。`} confirmLabel="删除素材" danger onCancel={() => setDeleteTarget(null)} onConfirm={() => void removeAsset()} />}
     </>
@@ -1211,11 +1199,10 @@ function AssetItem({
   onDelete: () => void;
   onLineage: () => void;
 }) {
-  const url = useSignedAssetUrl(asset.id);
   return (
     <article className="user-asset-item">
       <button className="user-asset-preview" onClick={() => navigate(`/app/studio?source=${asset.id}`)} title="在编辑器中打开" type="button">
-        {url ? (asset.mime_type === "image/svg+xml" ? <FileImage size={42} /> : <img alt={asset.original_filename || "图片素材"} src={url} />) : <LoaderCircle className="spin" size={22} />}
+        <ImageThumbnail id={asset.id} vector={asset.mime_type === "image/svg+xml"} alt={asset.original_filename || "图片素材"} />
         <span>{asset.kind === "original" ? "原图" : asset.kind === "vector" ? "SVG" : "结果"}</span>
       </button>
       <div className="user-asset-copy">
@@ -1250,26 +1237,13 @@ function AssetLineageDrawer({ items, onClose }: { items: Asset[]; onClose: () =>
 
 function JobsPage() {
   const [status, setStatus] = useState("");
-  const [items, setItems] = useState<ImageJob[] | null>(null);
-  const [error, setError] = useState("");
+  const pager = useCursorPage(status, (cursor, limit) => api.jobs(status, { cursor, limit }));
+  const { items, setItems, error, setError, load } = pager;
   const [selected, setSelected] = useState<ImageJob | null>(null);
 
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      const serverStatus = status === "refunded" ? "" : status;
-      const payload = await api.jobs(serverStatus);
-      setItems(status === "refunded" ? payload.items.filter((item) => item.refund_status === "refunded") : payload.items);
-    } catch (reason) {
-      setError(messageOf(reason, "无法载入任务"));
-      setItems([]);
-    }
-  }, [status]);
-
-  useEffect(() => void load(), [load]);
   useEffect(() => {
     if (!items?.some((item) => ["queued", "running", "retry_wait"].includes(item.status))) return;
-    const timer = window.setInterval(() => void load(), 4000);
+    const timer = window.setInterval(() => void load(true), 4000);
     return () => window.clearInterval(timer);
   }, [items, load]);
 
@@ -1297,8 +1271,8 @@ function JobsPage() {
           <header><span>任务</span><span>状态</span><span>积分</span><span>时间</span><span>操作</span></header>
           {items.map((job) => (
             <article key={job.id}>
-              <button className="user-job-name" onClick={() => setSelected(job)} type="button"><span className="user-operation-icon">{(() => { const Icon = OPERATION_META[job.operation_code]?.icon || FileImage; return <Icon size={18} />; })()}</span><span><strong>{operationName(job.operation_code)}</strong><small>{job.id.slice(0, 8)}</small></span></button>
-              <div><StatusBadge status={job.status} />{["queued", "running", "retry_wait"].includes(job.status) && <div className="user-inline-progress"><i style={{ width: `${Math.max(4, job.progress)}%` }} /></div>}</div>
+              <button className="user-job-name" onClick={() => setSelected(job)} type="button"><span className="user-job-thumbnail"><ImageThumbnail id={job.output_asset_id || job.source_asset_id} /></span><span><strong>{operationName(job.operation_code)}</strong><small>{job.id.slice(0, 8)}</small></span></button>
+              <div><StatusBadge status={job.status} />{["queued", "running", "retry_wait"].includes(job.status) && <JobProgress job={job} compact />}</div>
               <strong className="user-job-points">-{job.charged_points}</strong>
               <time>{dateTime(job.created_at)}</time>
               <div className="user-row-actions"><button aria-label="查看任务详情" onClick={() => setSelected(job)} title="查看详情" type="button"><MoreHorizontal size={18} /></button>{job.status === "queued" && <button aria-label="取消任务" className="danger" onClick={() => void cancel(job)} title="取消任务" type="button"><XCircle size={18} /></button>}</div>
@@ -1306,12 +1280,21 @@ function JobsPage() {
           ))}
         </section>
       )}
-      {selected && <JobDrawer job={selected} onCancel={cancel} onClose={() => setSelected(null)} />}
+      <Pagination pager={pager} />
+      {selected && <JobDrawer job={items?.find((job) => job.id === selected.id) || selected} onCancel={cancel} onClose={() => setSelected(null)} />}
     </>
   );
 }
 
-function JobDrawer({ job, onCancel, onClose }: { job: ImageJob; onCancel: (job: ImageJob) => Promise<void>; onClose: () => void }) {
+function JobDrawer({ job: initialJob, onCancel, onClose }: { job: ImageJob; onCancel: (job: ImageJob) => Promise<void>; onClose: () => void }) {
+  const [job, setJob] = useState(initialJob);
+  useEffect(() => setJob(initialJob), [initialJob]);
+  useEffect(() => {
+    if (!["queued", "running", "retry_wait"].includes(job.status)) return;
+    let active = true;
+    const timer = window.setInterval(() => { void api.job(initialJob.id).then((value) => { if (active) setJob(value.job); }).catch(() => undefined); }, 2500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [initialJob.id, job.status]);
   const failed = ["failed", "timed_out", "cancelled"].includes(job.status);
   return (
     <div className="user-drawer-layer">
@@ -1319,6 +1302,8 @@ function JobDrawer({ job, onCancel, onClose }: { job: ImageJob; onCancel: (job: 
       <aside className="user-drawer" aria-label="任务详情">
         <header><span><small>任务详情</small><strong>{operationName(job.operation_code)}</strong></span><button aria-label="关闭" onClick={onClose} title="关闭" type="button"><X size={19} /></button></header>
         <div className="user-job-detail-head"><StatusBadge status={job.status} /><code>{job.id}</code></div>
+        <div className="user-job-preview-pair">{job.source_asset_id && <figure><ImageThumbnail id={job.source_asset_id} alt="处理前" /><figcaption>处理前</figcaption></figure>}{job.output_asset_id && <figure><ImageThumbnail id={job.output_asset_id} alt="处理后" /><figcaption>处理后</figcaption></figure>}</div>
+        <JobProgress job={job} />
         <dl className="user-detail-list"><div><dt>处理进度</dt><dd>{job.progress}%</dd></div><div><dt>消耗积分</dt><dd>{job.charged_points}</dd></div><div><dt>尝试次数</dt><dd>{job.attempt_count}</dd></div><div><dt>退款状态</dt><dd>{job.refund_status === "refunded" ? "已退款" : "无退款"}</dd></div><div><dt>提交时间</dt><dd>{dateTime(job.created_at)}</dd></div><div><dt>完成时间</dt><dd>{dateTime(job.completed_at)}</dd></div></dl>
         {failed && <div className="user-failure-box"><AlertCircle size={18} /><span><strong>{job.error_message || (job.status === "cancelled" ? "任务已由你取消" : "图片处理未能完成")}</strong><small>{job.refund_status === "refunded" ? "本次消耗积分已自动退回。" : "系统正在核对退款状态。"}</small></span></div>}
         {job.status === "queued" && <button className="user-danger-button" onClick={() => void onCancel(job)} type="button"><XCircle size={17} />取消任务并退款</button>}
@@ -1331,16 +1316,13 @@ function JobDrawer({ job, onCancel, onClose }: { job: ImageJob; onCancel: (job: 
 
 function PointsPage({ bootstrap }: { bootstrap: BootstrapData }) {
   const [balance, setBalance] = useState(bootstrap.points);
-  const [items, setItems] = useState<PointTransaction[] | null>(null);
   const [filter, setFilter] = useState("");
-  const [error, setError] = useState("");
+  const pager = useCursorPage(filter, (cursor, limit) => api.pointTransactions({ cursor, limit, category: filter }));
+  const { items, error, setError } = pager;
   useEffect(() => {
-    Promise.all([api.pointBalance(), api.pointTransactions()]).then(([account, transactions]) => {
-      setBalance({ ...balance, ...account.account });
-      setItems(transactions.items);
-    }).catch((reason) => { setError(messageOf(reason)); setItems([]); });
+    api.pointBalance().then((account) => setBalance((current) => ({ ...current, ...account.account }))).catch((reason) => setError(messageOf(reason)));
   }, []);
-  const filtered = (items || []).filter((item) => !filter || pointCategory(item.entry_type) === filter);
+  const filtered = items || [];
   return (
     <>
       <PageHeader eyebrow="账户资产" title="积分余额与流水" description="每笔消费、退款、赠送和调整均可追溯到关联业务。" />
@@ -1352,15 +1334,9 @@ function PointsPage({ bootstrap }: { bootstrap: BootstrapData }) {
           {filtered.map((item) => <article key={item.id}><span className={`user-ledger-icon ${item.delta >= 0 ? "positive" : "negative"}`}><Coins size={17} /></span><div><strong>{pointLabel(item.entry_type)}</strong><small>{item.description} · {item.reference_type} {item.reference_id.slice(0, 8)}</small></div><strong className={item.delta >= 0 ? "positive" : "negative"}>{item.delta > 0 ? "+" : ""}{item.delta}</strong><span><small>余额</small><strong>{item.balance_after}</strong></span><time>{dateTime(item.created_at)}</time></article>)}
         </section>
       )}
+      <Pagination pager={pager} />
     </>
   );
-}
-
-function pointCategory(type: string): string {
-  if (type === "consume") return "consume";
-  if (type === "refund" || type === "reversal") return "refund";
-  if (["grant", "renewal", "promotion"].includes(type)) return "grant";
-  return "adjust";
 }
 
 function pointLabel(type: string): string {
@@ -1623,7 +1599,7 @@ function StatusBadge({ status, label }: { status: string; label?: string }) {
 }
 
 function JobRow({ job }: { job: ImageJob }) {
-  return <button onClick={() => navigate("/app/jobs")} type="button"><span className="user-operation-icon">{(() => { const Icon = OPERATION_META[job.operation_code]?.icon || FileImage; return <Icon size={17} />; })()}</span><span><strong>{operationName(job.operation_code)}</strong><small>{dateTime(job.created_at)}</small></span><StatusBadge status={job.status} /><ArrowRight size={15} /></button>;
+  return <button onClick={() => navigate("/app/jobs")} type="button"><span className="user-job-thumbnail"><ImageThumbnail id={job.output_asset_id || job.source_asset_id} /></span><span><strong>{operationName(job.operation_code)}</strong><small>{dateTime(job.created_at)}</small></span><StatusBadge status={job.status} /><ArrowRight size={15} /></button>;
 }
 
 function useSignedAssetUrl(assetId: string | null, revision = 0, onError?: (reason: unknown) => void): string | null {
@@ -1655,8 +1631,14 @@ function useSignedAssetUrl(assetId: string | null, revision = 0, onError?: (reas
 }
 
 function AssetThumb({ asset, label, onClick }: { asset: Asset; label?: string; onClick: () => void }) {
-  const url = useSignedAssetUrl(asset.id);
-  return <button className="user-asset-thumb" onClick={onClick} title={operationName(asset.operation_code)} type="button">{url && asset.mime_type !== "image/svg+xml" ? <img alt={operationName(asset.operation_code)} src={url} /> : url ? <FileImage size={25} /> : <LoaderCircle className="spin" size={18} />}{label && <span>{label}</span>}</button>;
+  const [preview, setPreview] = useState<{ left: number; top: number } | null>(null);
+  function show(target: HTMLButtonElement) {
+    if (!label) return;
+    const rect = target.getBoundingClientRect();
+    setPreview({ left: Math.max(12, Math.min(rect.left + rect.width / 2 - 130, window.innerWidth - 272)), top: Math.max(12, rect.top - 294) });
+  }
+  useEffect(() => { if (!preview) return; const close = () => setPreview(null); window.addEventListener("scroll", close, true); window.addEventListener("resize", close); return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); }; }, [preview]);
+  return <><button className="user-asset-thumb" onClick={() => { setPreview(null); onClick(); }} onMouseEnter={(event) => show(event.currentTarget)} onMouseLeave={() => setPreview(null)} onFocus={(event) => show(event.currentTarget)} onBlur={() => setPreview(null)} aria-label={`${label || ""} ${operationName(asset.operation_code)}`} type="button"><ImageThumbnail id={asset.id} vector={asset.mime_type === "image/svg+xml"} alt={operationName(asset.operation_code)} />{label && <span>{label}</span>}</button>{preview && createPortal(<div className="user-version-preview" style={preview} role="tooltip"><ImageThumbnail id={asset.id} vector={asset.mime_type === "image/svg+xml"} /><strong>{label} · {operationName(asset.operation_code)}</strong><small>{asset.width} × {asset.height}</small></div>, document.body)}</>;
 }
 
 async function downloadAsset(assetId: string): Promise<void> {
@@ -1685,7 +1667,13 @@ function EmptyState({ icon: Icon, title, description, compact = false }: { icon:
 }
 
 function Brand({ inverse = false }: { inverse?: boolean }) {
-  return <span className={`user-brand${inverse ? " inverse" : ""}`}><img src="/brand-symbol.svg" width="34" height="34" alt="" /><strong>Sub2Image</strong></span>;
+  const branding = useSiteBranding();
+  return <span className={`user-brand${inverse ? " inverse" : ""}`}><img src={branding.logo_url} width="34" height="34" alt="" /><strong>{branding.site_name}</strong></span>;
+}
+
+function BrandArtwork({ place, className }: { place: "login" | "register" | "home"; className: string }) {
+  const branding = useSiteBranding();
+  return <img className={className} src={branding[`${place}_image_url`]} alt={place === "register" ? "珍珠与香槟色纸艺雕塑" : "银色与虹彩玻璃光影雕塑"} fetchPriority="high" decoding="async" />;
 }
 
 function Avatar({ name }: { name: string }) {

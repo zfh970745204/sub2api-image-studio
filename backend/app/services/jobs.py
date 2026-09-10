@@ -83,6 +83,19 @@ class JobReconciliationResult:
     mismatches: int = 0
 
 
+def default_quality_rules(base_points: int) -> dict[str, Any]:
+    fine = max(1, math.ceil(base_points / 2))
+    return {
+        "rules": [
+            {
+                "parameter": "quality",
+                "type": "choice",
+                "points": {"low": 0, "medium": 0, "high": fine, "auto": fine},
+            }
+        ]
+    }
+
+
 async def sync_builtin_operations(
     session: AsyncSession, *, now: datetime | None = None
 ) -> dict[str, OperationCatalog]:
@@ -109,7 +122,9 @@ async def sync_builtin_operations(
                 operation_id=operation.id,
                 version=1,
                 base_points=seed.base_points,
-                parameter_rules={},
+                parameter_rules=default_quality_rules(seed.base_points)
+                if seed.code.startswith("ai.")
+                else {},
                 effective_from=current_time,
                 effective_to=None,
                 created_by=None,
@@ -152,7 +167,14 @@ class JobService:
         entitlement = await self.entitlements.current_snapshot(
             session, user_id, now=current_time, request_id=request_id
         )
-        surcharge = self.calculate_surcharge(price.parameter_rules, canonical)
+        effective = dict(canonical)
+        if operation_code.startswith("ai."):
+            quality = effective.setdefault(
+                "quality", "medium" if operation_code == "ai.generate" else "high"
+            )
+            if not isinstance(quality, str) or quality not in {"low", "medium", "high", "auto"}:
+                raise ApiError(422, "INVALID_OPERATION_PARAMETERS", "生成质量无效")
+        surcharge = self.calculate_surcharge(price.parameter_rules, effective)
         discounted_base = math.ceil(price.base_points * entitlement.discount_bps / 10_000)
         final_points = max(0, discounted_base + surcharge)
         quote = JobQuote(
@@ -888,7 +910,7 @@ class JobService:
         ).one_or_none()
         if operation is None:
             raise ApiError(404, "OPERATION_NOT_FOUND", "图片操作不存在")
-        self.validate_parameter_rules(parameter_rules)
+        parameter_rules = self.quality_price_rules(operation_code, base_points, parameter_rules)
         prices = list(
             (
                 await session.scalars(
@@ -1011,6 +1033,34 @@ class JobService:
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def quality_price_rules(
+        cls, operation_code: str, base_points: int, rules: dict[str, Any]
+    ) -> dict[str, Any]:
+        cls.validate_parameter_rules(rules)
+        if not operation_code.startswith("ai."):
+            return rules
+        quality = next(
+            (rule for rule in rules.get("rules", []) if rule["parameter"] == "quality"), None
+        )
+        if quality is None:
+            return {
+                "rules": [*rules.get("rules", []), *default_quality_rules(base_points)["rules"]]
+            }
+        points = quality.get("points", {})
+        if (
+            quality["type"] != "choice"
+            or not {"low", "medium", "high", "auto"}.issubset(points)
+            or points["high"] <= points["medium"]
+            or points["auto"] < points["high"]
+        ):
+            raise ApiError(
+                422,
+                "INVALID_PARAMETER_RULES",
+                "精细质量附加积分必须高于标准，自动质量至少按精细计价",
+            )
+        return rules
 
     @classmethod
     def calculate_surcharge(

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import String, cast, func, select
 
 from app.api.dependencies import Principal, require_permission
 from app.api.errors import ApiError
@@ -101,6 +102,9 @@ async def _asset_page(
     cursor: uuid.UUID | None,
     limit: int,
     order: Literal["asc", "desc"] = "desc",
+    created_day: date | None = None,
+    job_query: str | None = None,
+    root_query: str | None = None,
 ) -> tuple[list[Asset], str | None]:
     _validate_filters(kind, status_filter)
     anchor = None
@@ -108,20 +112,28 @@ async def _asset_page(
         anchor = await session.get(Asset, cursor)
         if anchor is None or (owner_id is not None and anchor.owner_id != owner_id):
             raise ApiError(422, "INVALID_CURSOR", "分页游标无效")
-    rows = list(
-        (
-            await session.scalars(
-                asset_page_statement(
-                    owner_id=owner_id,
-                    kind=kind,
-                    root_id=root_id,
-                    status=status_filter,
-                    anchor=anchor,
-                    order=order,
-                ).limit(limit + 1)
-            )
-        ).all()
+    statement = asset_page_statement(
+        owner_id=owner_id,
+        kind=kind,
+        root_id=root_id,
+        status=status_filter,
+        anchor=anchor,
+        order=order,
     )
+    if created_day is not None:
+        start = datetime.combine(created_day, datetime.min.time(), tzinfo=UTC)
+        statement = statement.where(
+            Asset.created_at >= start, Asset.created_at < start + timedelta(days=1)
+        )
+    for column, query in ((Asset.source_job_id, job_query), (Asset.root_asset_id, root_query)):
+        if query:
+            normalized = query.strip().lower().replace("-", "")
+            if not normalized or any(c not in "0123456789abcdef" for c in normalized):
+                raise ApiError(422, "INVALID_ASSET_FILTER", "任务和版本链筛选请输入完整或部分 ID")
+            statement = statement.where(
+                func.replace(cast(column, String), "-", "").contains(normalized)
+            )
+    rows = list((await session.scalars(statement.limit(limit + 1))).all())
     items = rows[:limit]
     return items, str(items[-1].id) if len(rows) > limit and items else None
 
@@ -206,6 +218,9 @@ async def list_assets(
     cursor: uuid.UUID | None = None,
     kind: str | None = None,
     root_id: uuid.UUID | None = None,
+    created_day: date | None = None,
+    job_query: str | None = Query(default=None, max_length=36),
+    root_query: str | None = Query(default=None, max_length=36),
     status_filter: str = Query(default="ready", alias="status"),
     limit: int = Query(default=30, ge=1, le=100),
 ) -> dict[str, Any]:
@@ -219,6 +234,9 @@ async def list_assets(
             status_filter=status_filter,
             cursor=cursor,
             limit=limit,
+            created_day=created_day,
+            job_query=job_query,
+            root_query=root_query,
         )
     return {"items": [asset_payload(item) for item in items], "next_cursor": next_cursor}
 
@@ -244,6 +262,20 @@ async def get_asset(
         )
         await session.commit()
     return {"asset": asset_payload(asset)}
+
+
+@router.get("/api/v1/assets/{asset_id}/thumbnail")
+async def get_thumbnail(asset_id: uuid.UUID, request: Request, principal: AssetReader):
+    storage = _storage(request)
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        try:
+            key = await service.ensure_thumbnail(
+                session, storage, asset_id=asset_id, owner_id=principal.user_id
+            )
+            url = await storage.presign_get(key, expires_seconds=600)
+        except ObjectStorageError as exc:
+            raise ApiError(503, "THUMBNAIL_UNAVAILABLE", "缩略图暂不可用") from exc
+    return RedirectResponse(url, headers={"Cache-Control": "private, max-age=60"})
 
 
 @router.get("/api/v1/assets/{asset_id}/lineage")

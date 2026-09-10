@@ -169,6 +169,34 @@ class GeneralValues(StrictValues):
         return value.strip()
 
 
+class BrandingValues(StrictValues):
+    site_name: str = Field(default="Sub2Image", min_length=1, max_length=60)
+    logo_url: str = "/brand-symbol.svg"
+    login_image_url: str = "/brand/login-art.webp"
+    register_image_url: str = "/brand/register-art.webp"
+    home_image_url: str = "/brand/home-art.webp"
+
+    @field_validator("site_name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("网站名称不能为空")
+        return value.strip()
+
+    @field_validator("logo_url", "login_image_url", "register_image_url", "home_image_url")
+    @classmethod
+    def public_image_url(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) > 2048 or any(c in value for c in ("\\", "%", "..", "?", "#")):
+            raise ValueError("图片地址无效，请上传图片或填写 HTTPS 图片地址")
+        if value == "/brand-symbol.svg" or value.startswith(("/brand/", "/api/v1/site/media/")):
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError("请上传图片或填写 HTTPS 图片地址")
+        return value
+
+
 @dataclass(frozen=True, slots=True)
 class GroupDefinition:
     name: str
@@ -177,6 +205,7 @@ class GroupDefinition:
 
 
 GROUP_DEFINITIONS: dict[str, GroupDefinition] = {
+    "branding": GroupDefinition("网站名称与品牌配图", BrandingValues, frozenset()),
     "sub2api": GroupDefinition("Sub2API", Sub2APIValues, frozenset({"api_key"})),
     "r2": GroupDefinition(
         "Cloudflare R2", R2Values, frozenset({"access_key_id", "secret_access_key"})

@@ -1,7 +1,7 @@
 from io import BytesIO
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app.image_ops import (
     ImageInputError,
@@ -159,6 +159,8 @@ def test_solid_background_removal_despills_antialiased_edge() -> None:
     green = np.array((0, 242, 19), dtype=np.float32)
     white = np.array((255, 255, 255), dtype=np.float32)
     image = Image.new("RGB", (30, 30), tuple(green.astype(np.uint8)))
+    # A real foreground reference is required; a lone pale-green pixel is ambiguous.
+    ImageDraw.Draw(image).rectangle((16, 10, 24, 20), fill=(255, 255, 255))
     blended = tuple(np.uint8((green + white) / 2))
     image.putpixel((15, 15), blended)
     source = BytesIO()

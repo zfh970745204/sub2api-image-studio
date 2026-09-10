@@ -114,6 +114,16 @@ Web, a single-concurrency Worker, Scheduler, and a memory-limited Redis; FastAPI
 bound to `127.0.0.1:18080` for the host reverse proxy. See
 `docs/productization/13-迁移部署与上线运维.md` for the production sequence.
 
+首次安装服务器更新器后，后续每次镜像发布完成只需执行一条命令：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zfh970745204/sub2api-image-studio/main/deploy/update-server.sh -o /usr/local/sbin/sub2image-update
+chmod 755 /usr/local/sbin/sub2image-update
+sub2image-update
+```
+
+详细说明见 [服务器一键更新](deploy/ONE_CLICK_UPDATE.md)。
+
 For local infrastructure development, set `DATABASE_URL` and `REDIS_URL`, then
 run migrations and each process separately:
 

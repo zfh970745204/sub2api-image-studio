@@ -333,6 +333,18 @@ def extract_print_artwork(
     }
 
 
+def print_extraction_key_color(raw_png: bytes) -> str:
+    """Choose the least represented key hue instead of asking the model to guess."""
+    with Image.open(BytesIO(raw_png)) as source:
+        image = source.convert("RGBA")
+        image.thumbnail((512, 512))
+        pixels = np.asarray(image, dtype=np.int16)
+    red, green, blue, alpha = np.moveaxis(pixels, -1, 0)
+    greens = np.count_nonzero((green - np.maximum(red, blue) > 25) & (alpha > 128))
+    magentas = np.count_nonzero((np.minimum(red, blue) - green > 25) & (alpha > 128))
+    return "#FF00FF" if greens > magentas else "#00FF00"
+
+
 def finalize_print_extraction(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
     """Preserve native alpha or key the legacy redraw's flat chroma background."""
     with Image.open(BytesIO(raw_png)) as source:
@@ -385,12 +397,8 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
     magenta_signal = min(red, blue) - green
 
     if green_signal >= 60:
-        pixel_signal = pixels[:, :, 1] - np.maximum(pixels[:, :, 0], pixels[:, :, 2])
-        alpha = 1 - np.clip(pixel_signal / green_signal, 0, 1)
         key_mode = "green"
     elif magenta_signal >= 60:
-        pixel_signal = np.minimum(pixels[:, :, 0], pixels[:, :, 2]) - pixels[:, :, 1]
-        alpha = 1 - np.clip(pixel_signal / magenta_signal, 0, 1)
         key_mode = "magenta"
     else:
         # Neutral backgrounds can also be printed ink. Remove only regions connected
@@ -407,15 +415,36 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
         alpha = cv2.GaussianBlur(alpha.astype(np.float32), (0, 0), 0.35)
         key_mode = "connected-neutral"
 
+    if key_mode != "connected-neutral":
+        # Only colors very close to the actual key are background. Hue dominance
+        # over the entire image destroys green ink, eyes and magenta design details.
+        key_pixels = np.linalg.norm(pixels - background_float, axis=2) <= 28
+        alpha = np.where(key_pixels, 0.0, 1.0).astype(np.float32)
+        boundary = cv2.dilate(key_pixels.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        solid = ~boundary
+        if np.any(solid):
+            # Estimate foreground from nearby opaque pixels, then unmix only the
+            # two-pixel transition at the key boundary. All solid ink stays exact.
+            _, nearest = cv2.distanceTransformWithLabels(
+                (~solid).astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL
+            )
+            colors = np.zeros((int(nearest.max()) + 1, 3), dtype=np.float32)
+            colors[nearest[solid]] = pixels[solid]
+            foreground_estimate = colors[nearest]
+            direction = foreground_estimate - background_float
+            fraction = np.clip(
+                np.sum((pixels - background_float) * direction, axis=2)
+                / np.maximum(np.sum(direction * direction, axis=2), 1),
+                0,
+                1,
+            )
+            reconstructed = background_float + fraction[:, :, None] * direction
+            edge = boundary & ~key_pixels & (np.linalg.norm(reconstructed - pixels, axis=2) < 16)
+            alpha[edge] = fraction[edge]
+
     alpha = alpha.astype(np.float32)
     alpha[alpha < 0.035] = 0
     alpha[alpha > 0.995] = 1
-    if key_mode != "connected-neutral":
-        alpha[:border] = 0
-        alpha[-border:] = 0
-        alpha[:, :border] = 0
-        alpha[:, -border:] = 0
-
     alpha_safe = np.maximum(alpha[:, :, None], 0.04)
     foreground = (pixels - (1 - alpha[:, :, None]) * background_float) / alpha_safe
     foreground = np.where(alpha[:, :, None] > 0.01, foreground, 0)
@@ -427,6 +456,7 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
         "method": "solid-background-to-alpha",
         "estimated_background_color": [int(value) for value in background],
         "key_mode": key_mode,
+        "color_preservation": "opaque-foreground-unchanged-v2",
     }
 
 

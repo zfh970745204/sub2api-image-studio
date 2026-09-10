@@ -108,6 +108,11 @@ export interface UserNotification {
   created_at: string;
 }
 
+export interface PriceRule {
+  parameter: string; type: "choice" | "per_unit";
+  points: Record<string, number> | number; included?: number; unit?: number;
+}
+
 export interface Operation {
   id: string;
   code: string;
@@ -115,7 +120,7 @@ export interface Operation {
   engine_type: string;
   enabled: boolean;
   member_base_points?: number;
-  current_price: { base_points: number } | null;
+  current_price: { base_points: number; parameter_rules?: { rules?: PriceRule[] } } | null;
 }
 
 export interface Quote {
@@ -206,6 +211,23 @@ export interface SessionInfo {
   current: boolean;
 }
 
+export interface PageOptions { cursor?: string | null; limit?: number; [key: string]: string | number | null | undefined }
+function pageQuery(options: PageOptions = {}) {
+  return new URLSearchParams(Object.entries({ limit: 100, ...options }).filter(([, value]) => value !== null && value !== undefined && value !== "").map(([key, value]) => [key, String(value)])).toString();
+}
+
+export function estimatedPoints(operation: Operation | undefined, parameters: Record<string, unknown>): number | null {
+  if (!operation?.current_price) return null;
+  let total = operation.member_base_points ?? operation.current_price.base_points;
+  for (const rule of operation.current_price.parameter_rules?.rules || []) {
+    const value = parameters[rule.parameter];
+    if (value === undefined) continue;
+    if (rule.type === "choice" && typeof rule.points === "object") total += rule.points[String(value)] || 0;
+    else if (rule.type === "per_unit" && typeof rule.points === "number") total += Math.ceil(Math.max(0, Number(value) - (rule.included || 0)) / (rule.unit || 1)) * rule.points;
+  }
+  return total;
+}
+
 export const api = {
   authOptions: () => request<{ registration_enabled: boolean }>("/api/v1/auth/options"),
   sendRegistrationCode: (email: string) => request<{ status: string; retry_after_seconds: number; expires_in_seconds: number }>("/api/v1/auth/register/email-code", {
@@ -271,18 +293,18 @@ export const api = {
       headers: { "Idempotency-Key": `studio:${quote_id}` },
       body: JSON.stringify({ quote_id, parameters }),
     }),
-  jobs: (status = "") =>
+  jobs: (status = "", page: PageOptions = {}) =>
     request<{ items: ImageJob[]; next_cursor: string | null }>(
-      `/api/v1/jobs?limit=100${status ? `&status=${encodeURIComponent(status)}` : ""}`,
+      `/api/v1/jobs?${pageQuery({ ...page, status })}`,
     ),
   job: (id: string) => request<{ job: ImageJob }>(`/api/v1/jobs/${id}`),
   jobEvents: (id: string) =>
     request<{ job: ImageJob; next_poll_after_ms: number | null }>(`/api/v1/jobs/${id}/events`),
   cancelJob: (id: string) =>
     request<{ job: ImageJob }>(`/api/v1/jobs/${id}/cancel`, { method: "POST" }),
-  assets: (kind = "") =>
+  assets: (kind = "", page: PageOptions = {}) =>
     request<{ items: Asset[]; next_cursor: string | null }>(
-      `/api/v1/assets?limit=100${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`,
+      `/api/v1/assets?${pageQuery({ ...page, kind })}`,
     ),
   asset: (id: string) => request<{ asset: Asset }>(`/api/v1/assets/${id}`),
   lineage: (id: string) => request<{ items: Asset[] }>(`/api/v1/assets/${id}/lineage`),
@@ -307,9 +329,9 @@ export const api = {
         status: string;
       };
     }>("/api/v1/points/balance"),
-  pointTransactions: () =>
+  pointTransactions: (page: PageOptions = {}) =>
     request<{ items: PointTransaction[]; next_cursor: string | null }>(
-      "/api/v1/points/transactions?limit=100",
+      `/api/v1/points/transactions?${pageQuery(page)}`,
     ),
   membership: () => request<{ membership: BootstrapData["membership"] }>("/api/v1/membership/me"),
   membershipPlans: () => request<{ items: MembershipPlan[] }>("/api/v1/membership/plans"),

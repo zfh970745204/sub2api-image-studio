@@ -1,6 +1,6 @@
 Use case: stylized-concept
 Asset type: brand artwork for a professional image creation studio
-Primary request: A sculptural folded silver ribbon floating within translucent glass image frames.
+Primary request: A sculptural folded silver ribbon floating within translucent glass image frames. This is the shared direction; the three production prompts are in brand-artwork-prompts.jsonl.
 Scene/backdrop: deep charcoal blue, subtle atmospheric light, quiet gallery space.
 Style/medium: refined studio rendering, smooth metallic reflections, restrained pearl and lilac highlights.
 Composition/framing: one complete sculptural form, generous negative space, clean silhouette; landscape for home, portrait with clear space above for login copy.

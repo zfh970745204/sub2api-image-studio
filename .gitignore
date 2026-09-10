@@ -13,5 +13,6 @@ coverage.json
 htmlcov/
 *.log
 *.tsbuildinfo
+output/imagegen/
 frontend/vite.config.js
 frontend/vite.config.d.ts

@@ -51,6 +51,17 @@ def prepare_asset(raw: bytes, *, kind: str, max_megapixels: int) -> PreparedAsse
     return _prepare_raster(raw, kind=kind, max_megapixels=max_megapixels)
 
 
+def make_thumbnail(raw: bytes) -> bytes:
+    with Image.open(BytesIO(raw)) as source:
+        if source.width * source.height > 200_000_000:
+            raise AssetInputError("图片过大，无法生成缩略图")
+        image = ImageOps.exif_transpose(source).convert("RGBA")
+        image.thumbnail((384, 384), Image.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, format="WEBP", quality=78, method=4)
+        return output.getvalue()
+
+
 def inspect_stored_asset(raw: bytes, *, extension: str) -> PreparedAsset:
     if extension.lower() == "svg":
         return _prepare_svg(raw, max_megapixels=200)

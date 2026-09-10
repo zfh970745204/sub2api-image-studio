@@ -290,12 +290,14 @@ async def job_page(
     limit: int,
     order: Literal["asc", "desc"] = "desc",
 ) -> tuple[list[ImageJob], str | None]:
-    if status_filter is not None and status_filter not in JOB_STATUSES:
+    if status_filter is not None and status_filter not in {*JOB_STATUSES, "refunded"}:
         raise ApiError(422, "VALIDATION_ERROR", "无效的任务状态")
     statement = select(ImageJob)
     if user_id is not None:
         statement = statement.where(ImageJob.user_id == user_id)
-    if status_filter is not None:
+    if status_filter == "refunded":
+        statement = statement.where(ImageJob.refund_status == "refunded")
+    elif status_filter is not None:
         statement = statement.where(ImageJob.status == status_filter)
     if cursor is not None:
         anchor = await session.get(ImageJob, cursor)
@@ -559,6 +561,7 @@ async def save_operation_configuration(
     principal: PricingManager,
 ) -> dict[str, Any]:
     database = request.app.state.runtime_services.database
+    rules = service.quality_price_rules(code, payload.base_points, payload.parameter_rules)
     async with database.session_factory() as session:
         operation = await service.update_operation(
             session,
@@ -574,13 +577,13 @@ async def save_operation_configuration(
         if (
             price is None
             or price.base_points != payload.base_points
-            or price.parameter_rules != payload.parameter_rules
+            or price.parameter_rules != rules
         ):
             price = await service.create_price(
                 session,
                 operation_code=code,
                 base_points=payload.base_points,
-                parameter_rules=payload.parameter_rules,
+                parameter_rules=rules,
                 effective_from=None,
                 actor_user_id=principal.user_id,
                 reason=payload.reason,

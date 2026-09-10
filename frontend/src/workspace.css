@@ -284,7 +284,7 @@ img.admin-brand-mark { display: block; padding: 0; border: 0; background: transp
 /* A wide comparison desk: tools across the top, settings on the right. */
 .user-studio-layout { grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
 .user-toolrail { grid-column: 1 / -1; display: flex; align-self: stretch; gap: 5px; padding: 6px; max-height: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.user-toolrail button { display: flex; align-items: center; justify-content: center; gap: 7px; flex: 1 0 auto; height: 40px; padding: 0 11px; }
+.user-toolrail button { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1 0 auto; height: 56px; padding: 0 13px; }
 .user-toolrail button span { font-size: 11px; white-space: nowrap; }
 .user-toolrail button.active { background: var(--user-accent-soft); color: var(--user-accent); }
 .user-canvas-column { position: relative; border: 1px solid var(--user-line); border-radius: 15px; background: var(--user-paper); min-width: 0; }

@@ -6,6 +6,8 @@ import time
 import uuid
 from typing import Any
 
+from sqlalchemy import update
+
 from app.api.errors import ApiError
 from app.config import Settings
 from app.image_ops import (
@@ -13,6 +15,7 @@ from app.image_ops import (
     apply_color_effect,
     finalize_print_extraction,
     has_chroma_key_background,
+    print_extraction_key_color,
     remove_background,
     remove_solid_background,
     upscale,
@@ -20,6 +23,7 @@ from app.image_ops import (
     vectorize_artwork,
 )
 from app.object_storage import ObjectStorage, ObjectStorageError
+from app.repositories.models import ImageJob
 from app.services.asset_files import AssetInputError, prepare_asset
 from app.services.assets import AssetService
 from app.services.configuration import RuntimeConfigCache, sub2api_settings
@@ -28,18 +32,8 @@ from app.services.security import SecurityService
 from app.sub2api import Sub2APIClient, Sub2APIError
 
 AI_EDIT_PROMPTS = {
-    # Migrated from the legacy faithful-redraw tool: product extraction belongs here.
-    "ai.extract_print": (
-        "Recreate only the printed artwork visible on the reference product (clothing, mug, bag, "
-        "or another print-on-demand product) as a clean, flat, front-facing high-resolution "
-        "source image. Preserve exact text, spelling, line breaks, composition, proportions, "
-        "colors, outlines, characters, objects, and small details. Remove fabric, folds, surface "
-        "texture, perspective, lighting, shadows, and the photographed product. Never redesign, "
-        "simplify, crop, add, or remove artwork. Place the complete artwork with a small clear "
-        "margin on a perfectly uniform fully saturated green #00FF00 background, or magenta "
-        "#FF00FF only if green occurs in the artwork. Keep white ink white and black ink black. "
-        "No mockup, no checkerboard, no ground plane, no drop shadow. Recover crisp print edges."
-    ),
+    # The detailed extraction prompt is composed with a source-safe key color in _execute.
+    "ai.extract_print": "Extract the print faithfully; source-safe instructions are applied at execution.",
     "ai.redraw": (
         "Faithfully restore the complete source image at high resolution. Recover natural edges, "
         "textures and fine detail, removing blur, compression artifacts, noise and jagged edges. "
@@ -116,17 +110,21 @@ class ImageJobExecutor:
 
     async def __call__(self, claim: ClaimedJob) -> dict[str, Any]:
         started = time.perf_counter()
+        await self._progress(claim, 8)
         source_data = await self._source_data(claim)
         try:
+            await self._progress(claim, 20)
             output, extension, provider_request_id, metadata = await self._execute(
                 claim, source_data
             )
+            await self._progress(claim, 80)
             prepared = await asyncio.to_thread(
                 prepare_asset,
                 output,
                 kind="vector" if extension == "svg" else "result",
                 max_megapixels=200,
             )
+            await self._progress(claim, 90)
             asset = await self.assets.store(
                 self.database,
                 self.storage,
@@ -163,6 +161,7 @@ class ImageJobExecutor:
             raise RetryableJobError("OBJECT_STORAGE_UNAVAILABLE", "对象存储暂时不可用") from exc
         except RuntimeError as exc:
             raise PermanentJobError("IMAGE_ENGINE_UNAVAILABLE", str(exc)) from exc
+        await self._progress(claim, 96)
         return {
             "output_asset_id": asset.id,
             "provider_request_id": provider_request_id,
@@ -171,6 +170,20 @@ class ImageJobExecutor:
                 "output_size_bytes": asset.size_bytes,
             },
         }
+
+    async def _progress(self, claim: ClaimedJob, progress: int) -> None:
+        async with self.database.session_factory() as session:
+            await session.execute(
+                update(ImageJob)
+                .where(
+                    ImageJob.id == claim.job_id,
+                    ImageJob.status == "running",
+                    ImageJob.attempt_count == claim.attempt_no,
+                    ImageJob.progress < progress,
+                )
+                .values(progress=progress)
+            )
+            await session.commit()
 
     async def publish_output(self, asset_id: uuid.UUID, job_id: uuid.UUID) -> bool:
         return await self.assets.publish_job_output(self.database, asset_id=asset_id, job_id=job_id)
@@ -247,6 +260,19 @@ class ImageJobExecutor:
                 parameters.get("instruction") or parameters.get("prompt") or ""
             ).strip()
             prompt = AI_EDIT_PROMPTS[operation]
+            key_color = None
+            if operation == "ai.extract_print":
+                key_color = await asyncio.to_thread(print_extraction_key_color, source)
+                prompt = (
+                    "Extract and flatten only the complete printed artwork from this product photo. "
+                    "Preserve the exact text, eye colors, ink hues, saturation, brightness, composition "
+                    "and fine detail. Remove the photographed product, folds, texture, lighting and "
+                    "perspective without redesigning or recoloring the artwork. Do not add contrast, "
+                    "orange warmth, cyan eyes or darken green ink. Keep white and black ink intact. "
+                    f"Use ONLY a perfectly uniform {key_color} background with a small clear margin. "
+                    "This color is a removable background, never a replacement for design colors. "
+                    "No mockup, checkerboard, ground plane, shadow or added elements."
+                )
             if instruction:
                 prompt = f"{prompt}\nUser instruction: {instruction}"
             mask = await self._mask_data(claim)
@@ -271,6 +297,7 @@ class ImageJobExecutor:
                     output_format="png",
                 )
             )
+            await self._progress(claim, 65)
             if operation == "ai.extract_print":
                 output, metadata = await asyncio.to_thread(finalize_print_extraction, upstream.data)
                 return (
@@ -281,6 +308,7 @@ class ImageJobExecutor:
                         **metadata,
                         "revised_prompt": upstream.revised_prompt,
                         "workflow": "faithful-product-print-extraction",
+                        "extraction_key_color": key_color,
                     },
                 )
             return (
