@@ -18,7 +18,12 @@ from app.repositories.models import (
     UserNotification,
     UserPreference,
 )
-from app.services.configuration import runtime_config_value
+from app.services.configuration import (
+    runtime_config_value,
+)
+from app.services.configuration import (
+    sub2api_configured as is_sub2api_configured,
+)
 from app.services.memberships import EntitlementService
 from app.services.points import PointService
 
@@ -160,11 +165,7 @@ async def service_features(request: Request) -> dict[str, bool]:
     if config_cache is not None:
         try:
             config = await config_cache.get("sub2api")
-            sub2api_configured = bool(
-                config.values.get("enabled")
-                and config.values.get("base_url")
-                and config.secrets.get("api_key")
-            )
+            sub2api_configured = is_sub2api_configured(config)
         except Exception:  # noqa: BLE001
             sub2api_configured = settings.sub2api_configured
         try:

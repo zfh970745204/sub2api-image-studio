@@ -71,6 +71,10 @@ class SaveConfigRequest(StrictRequest):
     change_reason: str = Field(default="管理员保存配置", min_length=1, max_length=500)
 
 
+class ProfileTestRequest(StrictRequest):
+    profile_id: str = Field(min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+
+
 class ReasonRequest(StrictRequest):
     reason: str = Field(min_length=1, max_length=500)
     confirm_sensitive_change: bool = False
@@ -228,6 +232,33 @@ async def test_active_config(
         outcome = await tester.test(resolved)
         # Connection tests report health; they never gate saving configuration.
     return {
+        "status": "succeeded" if outcome.succeeded else "failed",
+        "message": outcome.message,
+        "latency_ms": outcome.latency_ms,
+    }
+
+
+@router.post("/{group_code}/test-profile")
+async def test_active_sub2api_profile(
+    request: Request,
+    group_code: str,
+    payload: ProfileTestRequest,
+    _principal: ConfigTester,
+) -> dict[str, Any]:
+    if group_code != "sub2api":
+        raise ApiError(404, "CONFIG_PROFILE_NOT_FOUND", "只有 Sub2API 支持线路测试")
+    service = _service(request)
+    async with _runtime(request).database.session_factory() as session:
+        group = await service.group(session, group_code)
+        if group.active_version is None:
+            raise ApiError(409, "CONFIG_NOT_SAVED", "请先保存配置，再测试线路")
+        resolved = await service.resolved(session, group_code)
+    tester = getattr(request.app.state, "config_connection_tester", None)
+    if tester is None or not hasattr(tester, "test_profile"):
+        tester = ConfigConnectionTester(request.app.state.settings)
+    outcome = await tester.test_profile(resolved, payload.profile_id)
+    return {
+        "profile_id": payload.profile_id,
         "status": "succeeded" if outcome.succeeded else "failed",
         "message": outcome.message,
         "latency_ms": outcome.latency_ms,

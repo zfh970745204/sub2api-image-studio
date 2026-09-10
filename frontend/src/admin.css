@@ -534,7 +534,6 @@ body:has(.admin-boot) {
 .admin-confirm-check input:checked + span { color: #fff; border-color: var(--admin-red); background: var(--admin-red); }
 .admin-confirm-check strong { font-size: 11px; }
 .admin-confirm-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 11px 16px; border-top: 1px solid var(--admin-line); background: var(--admin-surface); }
-.admin-form-error { display: flex; align-items: flex-start; gap: 7px; margin: 10px 16px; padding: 9px; color: var(--admin-red); border: 1px solid #ecc4bf; border-radius: 5px; background: var(--admin-red-soft); font-size: 10px; }
 
 .admin-login-page,
 .admin-boot { min-height: 100vh; display: grid; place-items: center; padding: 20px; background: #edf1ef; }
@@ -546,10 +545,9 @@ body:has(.admin-boot) {
 .admin-login-panel label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 13px; color: #48524f; font-size: 11px; font-weight: 650; }
 .admin-login-panel input { height: 39px; padding: 0 10px; border: 1px solid var(--admin-line); border-radius: 5px; font-size: 13px; font-weight: 400; }
 .admin-login-panel .admin-primary-button { margin-top: 5px; min-height: 39px; }
-.admin-login-panel .admin-form-error { margin: 0 0 10px; }
 .admin-login-panel > a { display: block; margin-top: 17px; color: var(--admin-muted); font-size: 10px; text-align: center; text-decoration: none; }
 .admin-login-panel > a:hover { color: var(--admin-accent); }
-.admin-boot { display: flex; gap: 15px; color: var(--admin-muted); }
+.admin-boot { grid-auto-flow: row; gap: 15px; color: var(--admin-muted); }
 .admin-empty-state { min-height: 480px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--admin-muted); }
 .admin-empty-state h1 { margin: 0; color: var(--admin-ink); font-size: 18px; }
 .admin-sidebar-scrim { display: none; z-index: 55; }

@@ -21,6 +21,9 @@ from app.services.configuration import (
     DynamicObjectStorage,
     RuntimeConfigCache,
 )
+from app.services.configuration import (
+    sub2api_configured as is_sub2api_configured,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,16 +89,14 @@ class RuntimeServices:
             self._check_heartbeat("scheduler"),
         )
         sub2api_configured = self.settings.sub2api_configured
+        sub2api_is_configured = sub2api_configured
         r2_configured = self.settings.r2_configured
         try:
             sub2api_config = await self.config_cache.get("sub2api")
-            sub2api_configured = bool(
-                sub2api_config.values.get("enabled")
-                and sub2api_config.values.get("base_url")
-                and sub2api_config.secrets.get("api_key")
-            )
+            sub2api_is_configured = is_sub2api_configured(sub2api_config)
         except Exception:  # noqa: BLE001
             logger.debug("active Sub2API config is not available")
+            sub2api_is_configured = sub2api_configured
         try:
             r2_config = await self.config_cache.get("r2")
             r2_configured = bool(
@@ -107,7 +108,7 @@ class RuntimeServices:
             )
         except Exception:  # noqa: BLE001
             logger.debug("active R2 config is not available")
-        sub2api_state: DependencyState = "ok" if sub2api_configured else "not_configured"
+        sub2api_state: DependencyState = "ok" if sub2api_is_configured else "not_configured"
         if r2_configured:
             r2 = await self._check("r2", self.object_storage.ping)
         else:

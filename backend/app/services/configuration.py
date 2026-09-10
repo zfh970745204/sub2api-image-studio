@@ -66,11 +66,49 @@ class StrictValues(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+class Sub2APIProfile(StrictValues):
+    id: str = Field(default="primary", min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    name: str = Field(default="主线路", min_length=1, max_length=80)
+    enabled: bool = True
+    priority: int = Field(default=1, ge=1, le=10000)
+    base_url: str = Field(default="", max_length=2048)
+    image_model: str = Field(default="gpt-image-2", min_length=1, max_length=200)
+    timeout_seconds: float = Field(default=180.0, gt=0, le=600)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("线路名称不能为空")
+        return normalized
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        return _http_url(value)
+
+    @field_validator("image_model")
+    @classmethod
+    def strip_model(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("图片模型不能为空")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_url_when_enabled(self) -> Sub2APIProfile:
+        if self.enabled and not self.base_url:
+            raise ValueError("启用 Sub2API 线路前必须填写接口地址")
+        return self
+
+
 class Sub2APIValues(StrictValues):
     enabled: bool = False
     base_url: str = Field(default="", max_length=2048)
     image_model: str = Field(default="gpt-image-2", min_length=1, max_length=200)
     timeout_seconds: float = Field(default=180.0, gt=0, le=600)
+    profiles: list[Sub2APIProfile] = Field(default_factory=list, max_length=20)
 
     @field_validator("base_url")
     @classmethod
@@ -87,8 +125,13 @@ class Sub2APIValues(StrictValues):
 
     @model_validator(mode="after")
     def require_url_when_enabled(self) -> Sub2APIValues:
-        if self.enabled and not self.base_url:
-            raise ValueError("启用 Sub2API 前必须填写接口地址")
+        if self.enabled and not self.base_url and not any(
+            profile.enabled and profile.base_url for profile in self.profiles
+        ):
+            raise ValueError("启用 Sub2API 前必须填写至少一条接口地址")
+        identifiers = [profile.id for profile in self.profiles]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("Sub2API 线路 ID 不能重复")
         return self
 
 
@@ -355,7 +398,12 @@ class ConfigService:
         self, code: str, secrets: dict[str, str], *, confirmed: bool
     ) -> dict[str, str]:
         definition = self.definition(code)
-        unknown = set(secrets) - definition.secret_keys
+        unknown = {
+            key
+            for key in secrets
+            if key not in definition.secret_keys
+            and not (code == "sub2api" and key.startswith("api_key_") and key[8:])
+        }
         if unknown:
             raise ApiError(422, "UNKNOWN_SECRET_KEY", "包含不支持的密钥字段")
         updates = {key: value.strip() for key, value in secrets.items() if value.strip()}
@@ -514,6 +562,13 @@ class ConfigService:
             )
         ).one_or_none()
         definition = self.definition(code)
+        secret_names = set(definition.secret_keys)
+        if code == "sub2api":
+            secret_names.update(
+                row.key_name
+                for row in by_key.values()
+                if row.key_name.startswith("api_key_")
+            )
         return {
             "id": version.id,
             "version": version.version,
@@ -525,7 +580,7 @@ class ConfigService:
                     "last_four": by_key[key].last_four if key in by_key else None,
                     "updated_at": by_key[key].created_at if key in by_key else None,
                 }
-                for key in sorted(definition.secret_keys)
+                for key in sorted(secret_names)
             },
             "created_by": version.created_by,
             "published_by": version.published_by,
@@ -925,7 +980,29 @@ class ConfigService:
             return
         required: set[str] = set()
         if code == "sub2api":
-            required = {"api_key"}
+            raw_profiles = resolved.values.get("profiles") or []
+            if raw_profiles:
+                enabled_profiles = [
+                    item
+                    for item in raw_profiles
+                    if isinstance(item, dict) and item.get("enabled", True)
+                ]
+                if not enabled_profiles:
+                    raise ApiError(
+                        409,
+                        "SUB2API_PROFILE_REQUIRED",
+                        "启用 Sub2API 时至少要启用一条线路",
+                    )
+                for profile in enabled_profiles:
+                    profile_id = str(profile.get("id", "primary"))
+                    dynamic_key = f"api_key_{profile_id}"
+                    has_legacy_primary = profile_id == "primary" and bool(
+                        resolved.secrets.get("api_key")
+                    )
+                    if not resolved.secrets.get(dynamic_key) and not has_legacy_primary:
+                        required.add(dynamic_key)
+            elif not sub2api_profile_settings(resolved):
+                required = {"api_key"}
         elif code == "r2":
             required = {"access_key_id", "secret_access_key"}
         elif code == "email" and resolved.values.get("provider") == "api":
@@ -984,7 +1061,11 @@ class ConfigConnectionTester:
             if not bool(config.values.get("enabled")):
                 return self._outcome(started, True, "DISABLED", "配置已禁用，字段校验通过")
             if config.group == "sub2api":
-                await Sub2APIClient(sub2api_settings(config)).list_models()
+                profiles = sub2api_profile_settings(config)
+                if not profiles:
+                    return self._outcome(started, False, "SUB2API_NOT_CONFIGURED", "没有可用的 Sub2API 线路")
+                for profile in profiles:
+                    await Sub2APIClient(profile).list_models()
             elif config.group == "r2":
                 await self._test_r2(config)
             elif config.group == "email":
@@ -1003,6 +1084,27 @@ class ConfigConnectionTester:
                 started,
                 False,
                 f"{config.group.upper()}_CONNECTION_FAILED",
+                f"连接测试失败（{exc.__class__.__name__}）",
+            )
+        return self._outcome(started, True, "CONNECTED", "连接测试通过")
+
+    async def test_profile(self, config: ResolvedConfig, profile_id: str) -> TestOutcome:
+        started = time.perf_counter()
+        if config.group != "sub2api":
+            return self._outcome(started, False, "PROFILE_NOT_SUPPORTED", "该配置组不支持线路测试")
+        try:
+            profile = next(
+                (item for item in sub2api_profile_settings(config) if item.profile_id == profile_id),
+                None,
+            )
+            if profile is None:
+                return self._outcome(started, False, "SUB2API_PROFILE_NOT_CONFIGURED", "线路未启用或密钥尚未设置")
+            await Sub2APIClient(profile).list_models()
+        except Exception as exc:  # noqa: BLE001
+            return self._outcome(
+                started,
+                False,
+                "SUB2API_PROFILE_CONNECTION_FAILED",
                 f"连接测试失败（{exc.__class__.__name__}）",
             )
         return self._outcome(started, True, "CONNECTED", "连接测试通过")
@@ -1078,18 +1180,67 @@ class ConfigConnectionTester:
 
 
 def sub2api_settings(config: ResolvedConfig) -> SimpleNamespace:
+    profiles = sub2api_profile_settings(config)
+    if profiles:
+        return profiles[0]
     return SimpleNamespace(
-        sub2api_base_url=config.values["base_url"],
+        profile_id="primary",
+        sub2api_base_url=config.values.get("base_url", ""),
         sub2api_api_key=config.secrets.get("api_key", ""),
-        sub2api_image_model=config.values["image_model"],
-        sub2api_timeout_seconds=config.values["timeout_seconds"],
-        normalized_base_url=str(config.values["base_url"]).rstrip("/"),
-        sub2api_configured=bool(
-            config.values.get("enabled")
-            and config.values.get("base_url")
-            and config.secrets.get("api_key")
-        ),
+        sub2api_image_model=config.values.get("image_model", "gpt-image-2"),
+        sub2api_timeout_seconds=config.values.get("timeout_seconds", 180.0),
+        normalized_base_url=str(config.values.get("base_url", "")).rstrip("/"),
+        sub2api_configured=False,
     )
+
+
+def sub2api_profile_settings(config: ResolvedConfig) -> list[SimpleNamespace]:
+    """Resolve enabled, complete profiles while retaining the legacy single-profile format."""
+    raw_profiles = config.values.get("profiles") or []
+    if not raw_profiles:
+        raw_profiles = [
+            {
+                "id": "primary",
+                "name": "主线路",
+                "enabled": True,
+                "priority": 1,
+                "base_url": config.values.get("base_url", ""),
+                "image_model": config.values.get("image_model", "gpt-image-2"),
+                "timeout_seconds": config.values.get("timeout_seconds", 180.0),
+            }
+        ]
+    resolved: list[SimpleNamespace] = []
+    for item in raw_profiles:
+        profile = item if isinstance(item, dict) else item.model_dump(mode="json")
+        profile_id = str(profile.get("id", "primary"))
+        api_key = config.secrets.get(f"api_key_{profile_id}", "")
+        if not api_key and profile_id == "primary":
+            api_key = config.secrets.get("api_key", "")
+        if not (
+            config.values.get("enabled")
+            and profile.get("enabled", True)
+            and profile.get("base_url")
+            and api_key
+        ):
+            continue
+        resolved.append(
+            SimpleNamespace(
+                profile_id=profile_id,
+                profile_name=str(profile.get("name", profile_id)),
+                priority=int(profile.get("priority", 1)),
+                sub2api_base_url=str(profile["base_url"]),
+                sub2api_api_key=api_key,
+                sub2api_image_model=str(profile.get("image_model", "gpt-image-2")),
+                sub2api_timeout_seconds=float(profile.get("timeout_seconds", 180.0)),
+                normalized_base_url=str(profile["base_url"]).rstrip("/"),
+                sub2api_configured=True,
+            )
+        )
+    return sorted(resolved, key=lambda item: (item.priority, item.profile_id))
+
+
+def sub2api_configured(config: ResolvedConfig) -> bool:
+    return bool(sub2api_profile_settings(config))
 
 
 def r2_settings(config: ResolvedConfig, settings: Settings) -> SimpleNamespace:

@@ -12,7 +12,7 @@ from sqlalchemy import select, update
 
 from app.api.auth import router as auth_router
 from app.api.configuration import router as configuration_router
-from app.api.errors import install_exception_handlers
+from app.api.errors import ApiError, install_exception_handlers
 from app.api.middleware import RequestContextMiddleware
 from app.config import Settings
 from app.domain.ids import uuid7
@@ -31,7 +31,9 @@ from app.services.configuration import (
     ConfigCipher,
     ConfigLoadError,
     ConfigService,
+    ResolvedConfig,
     RuntimeConfigCache,
+    sub2api_profile_settings,
 )
 from app.services.configuration import (
     TestOutcome as ConnectionTestOutcome,
@@ -152,6 +154,49 @@ def sub2api_draft(*, model: str = "gpt-image-2", secret: str = PLAINTEXT) -> dic
         "change_reason": "轮换上游配置",
         "confirm_sensitive_change": True,
     }
+
+
+def test_sub2api_profiles_are_resolved_by_priority_without_exposing_secrets() -> None:
+    config = ResolvedConfig(
+        group="sub2api",
+        version=2,
+        values={
+            "enabled": True,
+            "base_url": "",
+            "image_model": "gpt-image-2",
+            "timeout_seconds": 120,
+            "profiles": [
+                {"id": "backup", "name": "备用", "enabled": True, "priority": 20, "base_url": "https://backup.example/v1", "image_model": "backup-model", "timeout_seconds": 90},
+                {"id": "primary", "name": "主线", "enabled": True, "priority": 1, "base_url": "https://primary.example/v1", "image_model": "primary-model", "timeout_seconds": 120},
+            ],
+        },
+        secrets={"api_key_primary": "primary-secret", "api_key_backup": "backup-secret"},
+    )
+    profiles = sub2api_profile_settings(config)
+    assert [item.profile_id for item in profiles] == ["primary", "backup"]
+    assert [item.sub2api_api_key for item in profiles] == ["primary-secret", "backup-secret"]
+
+
+def test_enabled_sub2api_profiles_cannot_silently_drop_missing_keys() -> None:
+    config = ResolvedConfig(
+        group="sub2api",
+        version=3,
+        values={
+            "enabled": True,
+            "base_url": "",
+            "image_model": "gpt-image-2",
+            "timeout_seconds": 120,
+            "profiles": [
+                {"id": "primary", "enabled": True, "priority": 1, "base_url": "https://primary.example/v1", "image_model": "gpt-image-2", "timeout_seconds": 120},
+                {"id": "backup", "enabled": True, "priority": 2, "base_url": "https://backup.example/v1", "image_model": "gpt-image-2", "timeout_seconds": 120},
+            ],
+        },
+        secrets={"api_key_primary": "primary-secret"},
+    )
+    with pytest.raises(ApiError) as caught:
+        ConfigService._require_complete("sub2api", config)
+    assert caught.value.code == "CONFIG_SECRET_REQUIRED"
+    assert caught.value.details == {"keys": ["api_key_backup"]}
 
 
 def test_aes_gcm_uses_unique_nonce_aad_and_rejects_tampering() -> None:

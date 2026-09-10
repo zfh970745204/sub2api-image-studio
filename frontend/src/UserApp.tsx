@@ -80,6 +80,7 @@ import {
 } from "./user-api";
 import { MaskCanvas, type MaskCanvasHandle } from "./MaskCanvas";
 import { ComparisonPreview } from "./ComparisonPreview";
+import { ToastMessage } from "./Toast";
 
 type AppRoute = "home" | "studio" | "assets" | "jobs" | "points" | "membership" | "profile";
 
@@ -214,10 +215,26 @@ function operationName(code: string): string {
 
 function UserApp() {
   const pathname = usePathname().split("?")[0];
+  if (pathname === "/") return <LandingPage />;
   if (pathname === "/forgot-password") return <ForgotPasswordPage />;
   if (pathname === "/login") return <LoginPage />;
   if (pathname === "/register") return <RegisterPage />;
   return <ProtectedApp pathname={pathname} />;
+}
+
+function LandingPage() {
+  const branding = useSiteBranding();
+  return (
+    <main className="user-landing-page">
+      <nav className="user-landing-nav"><Brand /><div><button className="user-text-button" onClick={() => navigate("/login")} type="button">登录</button><button className="user-primary compact" onClick={() => navigate("/register")} type="button"><UserRound size={15} />开始创作</button></div></nav>
+      <section className="user-landing-hero">
+        <div className="user-landing-copy"><span className="user-landing-kicker"><i />SUB2IMAGE · CREATIVE WORKBENCH</span><h1>{branding.site_name}<br /><em>让每一处细节成为作品。</em></h1><p>从灵感生成，到产品印花提取、高清重绘与透明 PNG 输出，把图片生产变成一条清晰、可复用的工作流。</p><div className="user-landing-actions"><button className="user-primary" onClick={() => navigate("/register")} type="button"><Sparkles size={17} />免费开始创作<ArrowRight size={16} /></button><button className="user-secondary" onClick={() => navigate("/login")} type="button">登录工作台</button></div><small>生成 · 提取 · 精修 · 版本管理</small></div>
+        <div className="user-landing-visual"><img src={branding.home_image_url} alt="图片创作工作台视觉" fetchPriority="high" /><div className="user-landing-visual-label"><span>01 / VISUAL SYSTEM</span><strong>从产品照片中提取<br />可直接生产的印花。</strong></div></div>
+      </section>
+      <section className="user-landing-features" aria-label="产品能力"><div className="user-landing-feature-intro"><span>WORKFLOW, REFINED</span><h2>为重复的图片工作，<br />建立稳定的方法。</h2></div><article><Sparkles size={21} /><span>01</span><h3>AI 生成</h3><p>把文字描述快速变成可继续编辑的视觉草稿。</p></article><article><FileImage size={21} /><span>02</span><h3>印花提取</h3><p>从衣服、杯子和帆布袋照片还原平面印花，输出透明 PNG。</p></article><article><WandSparkles size={21} /><span>03</span><h3>高清重绘</h3><p>清理模糊、压缩和锯齿，保留原图内容与构图。</p></article></section>
+      <footer className="user-landing-footer"><Brand /><span>一个更安静、更准确的图片生产空间。</span><button className="user-text-button" onClick={() => navigate("/register")} type="button">进入工作台<ArrowRight size={15} /></button></footer>
+    </main>
+  );
 }
 
 function LoginPage() {
@@ -375,7 +392,7 @@ function RegisterPage() {
         <label><span>显示名称</span><input autoComplete="nickname" maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} /></label>
         <label><span>邮箱</span><input ref={emailRef} disabled={sending || busy} autoComplete="email" type="email" maxLength={320} required value={email} onChange={(event) => { setEmail(event.target.value); setCode(""); setSentTo(""); }} /></label>
         <div className="user-verification-field"><label><span>邮箱验证码</span><input autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} required value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} placeholder="6 位数字" /></label><button className="user-secondary" disabled={sending || busy || secondsLeft > 0 || !email.trim()} onClick={() => void sendCode()} type="button">{sending ? "正在发送…" : secondsLeft > 0 ? `${secondsLeft} 秒后重发` : sentTo ? "重新发送" : "获取验证码"}</button></div>
-        {sentTo && <p className="user-code-notice" role="status">验证码已发送至 {sentTo}，10 分钟内有效。未收到时请检查垃圾邮件。</p>}
+        {sentTo && <InlineMessage tone="success">验证码已发送至 {sentTo}，10 分钟内有效。未收到时请检查垃圾邮件。</InlineMessage>}
         <label><span>密码</span><input autoComplete="new-password" type="password" minLength={12} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} /><small>12–128 个字符，建议使用较长的独立密码。</small></label>
         <label><span>确认密码</span><input autoComplete="new-password" type="password" minLength={12} maxLength={128} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
         <button className="user-primary user-auth-submit" disabled={busy || sending} type="submit">{busy ? <LoaderCircle className="spin" size={18} /> : <UserRound size={18} />}{busy ? "正在创建" : "注册并进入工作台"}</button>
@@ -1658,8 +1675,7 @@ function SectionHeader({ icon: Icon, title, action }: { icon: ComponentType<{ si
 }
 
 function InlineMessage({ tone, children }: { tone: "error" | "success" | "warning"; children: ReactNode }) {
-  const Icon = tone === "success" ? CheckCircle2 : AlertCircle;
-  return <div className={`user-inline-message ${tone}`} role={tone === "error" ? "alert" : "status"}><Icon size={17} /><span>{children}</span></div>;
+  return <ToastMessage tone={tone}>{children}</ToastMessage>;
 }
 
 function EmptyState({ icon: Icon, title, description, compact = false }: { icon: ComponentType<{ size?: number }>; title: string; description: string; compact?: boolean }) {

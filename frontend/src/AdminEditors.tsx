@@ -1,6 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { CircleAlert, RefreshCw, Save, X } from "lucide-react";
+import { ArrowDown, ArrowUp, FlaskConical, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
 import { apiRequest, jsonObject, objectValue, type AdminRow as Row } from "./admin-api";
+import { ToastMessage } from "./Toast";
 
 export type EditorKind = "settings" | "pricing" | "memberships" | "points" | "roles" | "users" | "user-membership" | "user-roles";
 interface EditorProps {
@@ -31,7 +32,7 @@ function EditorForm({ title, children, onClose, onSubmit, label = "保存", disa
     <form className="admin-detail-drawer admin-editor" role="dialog" aria-modal="true" aria-label={title} onSubmit={submit}>
       <header><div><p>管理后台</p><h2>{title}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭编辑" disabled={busy} onClick={onClose}><X size={18} /></button></header>
       <div className="admin-drawer-content"><fieldset disabled={busy || disabled}>{children}</fieldset></div>
-      {error && <div className="admin-form-error" role="alert"><CircleAlert size={16} />{error}</div>}
+      {error && <ToastMessage tone="error">{error}</ToastMessage>}
       <footer>{extra}<button type="button" className="admin-secondary-button" disabled={busy} onClick={onClose}>关闭</button><button className="admin-primary-button" disabled={busy || disabled}>{busy ? <RefreshCw size={15} className="spin" /> : <Save size={15} />}{busy ? "正在保存…" : label}</button></footer>
     </form>
   </div>;
@@ -114,21 +115,68 @@ function SiteImageUpload({ label, url, onUploaded }: { label: string; url: strin
     event.target.value = ""; setBusy(true); setError("");
     const body = new FormData(); body.append("image", file);
     void apiRequest<{ url: string }>("/api/v1/admin/site-media", { method: "POST", body }).then((result) => onUploaded(result.url)).catch((reason: Error) => setError(reason.message)).finally(() => setBusy(false));
-  }} /></label><small>PNG / JPEG / WebP，最大 12 MB。品牌配图公开展示，保存配置后生效。</small>{error && <p role="alert">{error}</p>}</div>;
+  }} /></label><small>PNG / JPEG / WebP，最大 12 MB。品牌配图公开展示，保存配置后生效。</small>{error && <ToastMessage tone="error">{error}</ToastMessage>}</div>;
+}
+
+function legacySub2ApiProfile(values: Row): Row {
+  return {
+    id: "primary",
+    name: "主线路",
+    enabled: Boolean(values.enabled),
+    priority: 1,
+    base_url: values.base_url || "",
+    image_model: values.image_model || "gpt-image-2",
+    timeout_seconds: values.timeout_seconds || 180,
+  };
 }
 
 function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
   const code = String(row.code);
   const active = objectValue(row.active);
-  const [values, setValues] = useState<Row>({ ...objectValue(row.defaults), ...objectValue(active.values) });
+  const [values, setValues] = useState<Row>(() => ({ ...objectValue(row.defaults), ...objectValue(active.values) }));
   const [secrets, setSecrets] = useState<Row>({});
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState("");
+  const [profileTesting, setProfileTesting] = useState("");
+  const [profileResults, setProfileResults] = useState<Row>({});
   const [history, setHistory] = useState<Row[] | null>(null);
   const [historyError, setHistoryError] = useState("");
-  const dirty = JSON.stringify(values) !== JSON.stringify({ ...objectValue(row.defaults), ...objectValue(active.values) }) || Object.values(secrets).some(Boolean);
+  const initialValues = { ...objectValue(row.defaults), ...objectValue(active.values) };
+  const profiles = Array.isArray(values.profiles) ? values.profiles as Row[] : [];
+  const dirty = JSON.stringify(values) !== JSON.stringify(initialValues) || Object.values(secrets).some(Boolean);
   const fields = (CONFIG_FIELDS[code] || []).filter((field) => code !== "email" ||
     (values.provider === "api" ? !["host", "port", "username", "use_tls"].includes(field.key) : field.key !== "api_base_url"));
+  const updateProfiles = (next: Row[]) => setValues((current) => ({ ...current, profiles: next }));
+  const enableProfiles = () => updateProfiles(profiles.length ? profiles : [legacySub2ApiProfile(values)]);
+  const updateProfile = (index: number, key: string, value: unknown) => {
+    const next = profiles.map((profile, current) => current === index ? { ...profile, [key]: value } : profile);
+    updateProfiles(next);
+  };
+  const addProfile = () => {
+    const nextId = `line${profiles.length + 1}`;
+    updateProfiles([...profiles, { ...legacySub2ApiProfile(values), id: nextId, name: `备用线路 ${profiles.length}`, enabled: false, priority: profiles.length + 1, base_url: "" }]);
+  };
+  const removeProfile = (index: number) => {
+    if (profiles.length <= 1) return;
+    updateProfiles(profiles.filter((_, current) => current !== index));
+  };
+  const moveProfile = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= profiles.length) return;
+    const next = [...profiles];
+    [next[index], next[target]] = [next[target], next[index]];
+    updateProfiles(next.map((profile, current) => ({ ...profile, priority: current + 1 })));
+  };
+  async function testProfile(profileId: string) {
+    setProfileTesting(profileId);
+    setProfileResults((current) => ({ ...current, [profileId]: "" }));
+    try {
+      const result = await apiRequest<{ status: string; message: string; latency_ms: number }>(`/api/v1/admin/config/${code}/test-profile`, { method: "POST", body: JSON.stringify({ profile_id: profileId }) });
+      setProfileResults((current) => ({ ...current, [profileId]: `${result.status === "succeeded" ? "连接正常" : "连接失败"} · ${result.latency_ms} ms · ${result.message}` }));
+    } catch (caught) {
+      setProfileResults((current) => ({ ...current, [profileId]: caught instanceof Error ? caught.message : "连接测试失败" }));
+    } finally { setProfileTesting(""); }
+  }
   async function testConnection() {
     setTesting(true); setTestResult("");
     try {
@@ -144,15 +192,30 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
   }}>
     <p className="admin-editor-note">填写配置后点击“保存并生效”。密钥留空保留原值，保存后可测试连接。</p>
     {code === "general" && <p className="admin-editor-note">公开注册必须先通过邮箱验证码验证。请在“邮件服务”配置发信渠道；验证成功后获得普通用户权限、默认会员和赠送积分。邮件自助找回暂未开放。</p>}
-    <Fields fields={fields} values={values} setValues={setValues} />
+    {code === "sub2api" && profiles.length > 0 ? <>
+      <Field field={CONFIG_FIELDS.sub2api[0]} value={values.enabled} onChange={(value) => setValues({ ...values, enabled: value })} />
+      <section className="admin-profile-section" aria-label="Sub2API线路">
+        <header><div><strong>线路池</strong><small>按优先级从小到大调用，当前线路返回额度或服务异常时自动切换下一条。</small></div><button className="admin-secondary-button compact" type="button" onClick={addProfile}><Plus size={14} />新增线路</button></header>
+        <div className="admin-profile-list">{profiles.map((profile, index) => {
+          const profileId = String(profile.id || `line${index + 1}`);
+          const stored = objectValue(objectValue(active.secrets)[`api_key_${profileId}`] || (profileId === "primary" ? objectValue(active.secrets).api_key : {}));
+          const result = String(profileResults[profileId] || "");
+          return <article className="admin-profile-card" key={profileId}>
+            <div className="admin-profile-card-head"><span><strong>{String(profile.name || profileId)}</strong><small>{profileId}</small></span><div><button className="admin-icon-button bordered" type="button" title="提高优先级" aria-label="提高优先级" disabled={index === 0} onClick={() => moveProfile(index, -1)}><ArrowUp size={14} /></button><button className="admin-icon-button bordered" type="button" title="降低优先级" aria-label="降低优先级" disabled={index === profiles.length - 1} onClick={() => moveProfile(index, 1)}><ArrowDown size={14} /></button><button className="admin-icon-button bordered danger" type="button" title="删除线路" aria-label="删除线路" disabled={profiles.length <= 1} onClick={() => removeProfile(index)}><Trash2 size={14} /></button></div></div>
+            <div className="admin-profile-grid"><Field field={{ key: "name", label: "线路名称" }} value={profile.name} onChange={(value) => updateProfile(index, "name", value)} /><Field field={{ key: "id", label: "线路 ID", hint: "保存后建议不要修改" }} value={profile.id} onChange={(value) => updateProfile(index, "id", value)} /><Field field={{ key: "priority", label: "优先级", type: "number", min: 1, max: 10000 }} value={profile.priority} onChange={(value) => updateProfile(index, "priority", value)} /><Field field={{ key: "enabled", label: "启用线路", type: "checkbox" }} value={profile.enabled} onChange={(value) => updateProfile(index, "enabled", value)} /><Field field={{ key: "base_url", label: "接口地址", hint: "例如 https://api.example.com/v1", required: false }} value={profile.base_url} onChange={(value) => updateProfile(index, "base_url", value)} /><Field field={{ key: "image_model", label: "图片模型" }} value={profile.image_model} onChange={(value) => updateProfile(index, "image_model", value)} /><Field field={{ key: "timeout_seconds", label: "请求超时（秒）", type: "number", min: 1, max: 600 }} value={profile.timeout_seconds} onChange={(value) => updateProfile(index, "timeout_seconds", value)} /><Field field={{ key: `api_key_${profileId}`, label: "API Key", type: "password", hint: stored.has_value ? `已设置（末尾 ${stored.last_four}），留空保留` : "尚未设置" }} value={secrets[`api_key_${profileId}`]} onChange={(value) => setSecrets({ ...secrets, [`api_key_${profileId}`]: value })} /></div>
+            <div className="admin-profile-actions"><button className="admin-secondary-button compact" type="button" disabled={Boolean(profileTesting) || !row.active_version || dirty} onClick={() => void testProfile(profileId)}><FlaskConical size={14} />{profileTesting === profileId ? "测试中…" : "测试连接"}</button>{result && <ToastMessage tone={result.startsWith("连接正常") ? "success" : "error"}>{result}</ToastMessage>}</div>
+          </article>;
+        })}</div>
+      </section>
+    </> : code === "sub2api" ? <><Fields fields={fields} values={values} setValues={setValues} /><button className="admin-secondary-button" type="button" onClick={enableProfiles}><Plus size={14} />启用多线路配置</button><p className="admin-editor-note">当前仍使用兼容的单线路配置。启用多线路后，可配置备用接口并在额度、限流或服务故障时自动切换。</p></> : <Fields fields={fields} values={values} setValues={setValues} />}
     {code === "branding" && <div className="admin-brand-uploads">{[["logo_url", "Logo"], ["login_image_url", "登录页配图"], ["register_image_url", "注册页配图"], ["home_image_url", "首页配图"]].map(([key, label]) => <SiteImageUpload key={key} label={label} url={String(values[key] || "")} onUploaded={(url) => setValues((current) => ({ ...current, [key]: url }))} />)}</div>}
     {(SECRET_FIELDS[code] || []).filter(([key]) => code !== "email" || key === (values.provider === "api" ? "api_key" : "password")).map(([key, label]) => {
       const stored = objectValue(objectValue(active.secrets)[key]);
       return <Field key={key} field={{ key, label, type: "password", hint: stored.has_value ? `已设置（末尾 ${stored.last_four}），留空保留` : "尚未设置" }} value={secrets[key]} onChange={(value) => setSecrets({ ...secrets, [key]: value })} />;
     })}
-    {permissions.has("config.test") && !["general", "branding"].includes(code) && <div className="admin-editor-section"><button type="button" className="admin-secondary-button" disabled={testing || !row.active_version || dirty} onClick={() => void testConnection()}>{testing ? "正在测试…" : "测试已保存的连接"}</button>{(!row.active_version || dirty) && <small>请先保存当前配置。</small>}{testResult && <p role="status">{testResult}</p>}</div>}
+    {permissions.has("config.test") && !["general", "branding"].includes(code) && <div className="admin-editor-section"><button type="button" className="admin-secondary-button" disabled={testing || !row.active_version || dirty} onClick={() => void testConnection()}>{testing ? "正在测试…" : "测试已保存的连接"}</button>{(!row.active_version || dirty) && <small>请先保存当前配置。</small>}{testResult && <ToastMessage tone={testResult.startsWith("连接正常") ? "success" : "error"}>{testResult}</ToastMessage>}</div>}
     <details className="admin-editor-section" onToggle={(event) => { if (event.currentTarget.open && history === null) void apiRequest<{ items: Row[] }>(`/api/v1/admin/config/${code}/history`).then((result) => { setHistory(result.items); setHistoryError(""); }).catch((error: Error) => setHistoryError(error.message)); }}>
-      <summary>配置修改历史</summary>{historyError && <p role="alert">{historyError}</p>}{history?.map((item) => <p key={String(item.id)}>v{String(item.version)} · {item.status === "active" ? "当前生效" : item.status === "draft" ? "未发布草稿" : "历史版本"} · {String(item.change_reason)}</p>)}{history?.length === 0 && <p>暂无修改记录</p>}
+      <summary>配置修改历史</summary>{historyError && <ToastMessage tone="error">{historyError}</ToastMessage>}{history?.map((item) => <p key={String(item.id)}>v{String(item.version)} · {item.status === "active" ? "当前生效" : item.status === "draft" ? "未发布草稿" : "历史版本"} · {String(item.change_reason)}</p>)}{history?.length === 0 && <p>暂无修改记录</p>}
     </details>
   </EditorForm>;
 }
@@ -237,7 +300,7 @@ function UserPicker({ selected, onSelect, canSearch }: { selected: Row | null; o
     {canSearch ? <><Field field={{ key: "search", label: "搜索用户邮箱或用户名", required: false }} value={query} onChange={(value) => setQuery(String(value))} /><div className="admin-picker-results">{users.map((user) => <button className="admin-secondary-button" type="button" key={String(user.id)} onClick={() => onSelect(user)}>{String(user.display_name)} · {String(user.email)}</button>)}</div>{!users.length && <p>暂无匹配用户</p>}</>
       : <Field field={{ key: "user_id", label: "用户 ID" }} value={query} onChange={(value) => setQuery(String(value))} />}
     {!canSearch && <button className="admin-secondary-button" type="button" disabled={!query.trim()} onClick={() => onSelect({ id: query.trim() })}>选择用户</button>}
-    {error && <p role="alert">{error}</p>}
+    {error && <ToastMessage tone="error">{error}</ToastMessage>}
   </section>;
 }
 
@@ -275,7 +338,7 @@ function PointsEditor({ row, permissions, onClose, onSaved }: EditorProps) {
   }}>
     <UserPicker selected={user} onSelect={setUser} canSearch={permissions.has("users.read")} />
     {account && <p className="admin-editor-balance">当前余额 <strong>{String(account.balance)}</strong> 积分</p>}
-    {accountError && <p role="alert">{accountError}</p>}
+    {accountError && <ToastMessage tone="error">{accountError}</ToastMessage>}
     <Field field={{ key: "amount", label: "调整积分", type: "number", min: -1000000000, max: 1000000000, hint: "正数增加，负数扣减；超级管理员直接生效。" }} value={amount} onChange={setAmount} />
     <Field field={{ key: "reason", label: "调整原因", type: "textarea" }} value={reason} onChange={(value) => setReason(String(value))} />
   </EditorForm>;
@@ -316,7 +379,7 @@ function UserMembershipEditor({ row, permissions, onClose, onSaved }: EditorProp
     onSaved("用户会员已生效");
   }}>
     <UserPicker selected={user} onSelect={setUser} canSearch={permissions.has("users.read")} />
-    {error && <p role="alert">{error}</p>}
+    {error && <ToastMessage tone="error">{error}</ToastMessage>}
     {active && <p className="admin-editor-note">当前会员：{String(objectValue(active.plan).name || active.plan_id)}；到期：{active.ends_at ? new Date(String(active.ends_at)).toLocaleString() : "长期有效"}</p>}
     <Field field={{ key: "plan_id", label: "会员套餐", options: [["", "选择套餐"], ...plans.map((item): [string, string] => [String(item.id), String(item.name)])] }} value={planId} onChange={(value) => setPlanId(String(value))} />
     {!perpetual && <Field field={{ key: "ends_at", label: "会员到期时间", type: "datetime-local" }} value={endsAt} onChange={(value) => setEndsAt(String(value))} />}
@@ -342,7 +405,7 @@ function RoleEditor({ row, onClose, onSaved }: EditorProps) {
     onSaved("角色权限已保存");
   }}>
     {Boolean(row.is_system) && <p className="admin-editor-note">内置角色的权限固定；可新建自定义角色，再到用户详情中分配。超级管理员拥有全部权限。</p>}
-    {error && <p role="alert">{error}</p>}
+    {error && <ToastMessage tone="error">{error}</ToastMessage>}
     <Field field={{ key: "code", label: "角色代码" }} value={fields.code} disabled={Boolean(row.id)} onChange={(value) => setFields({ ...fields, code: value })} />
     <Fields fields={[{ key: "name", label: "角色名称" }, { key: "description", label: "角色说明", type: "textarea" }]} values={fields} setValues={setFields} />
     <div className="admin-permission-list">{permissions.map((item) => <Field key={String(item.code)} field={{ key: String(item.code), label: `${item.description}（${item.code}）`, type: "checkbox" }} value={codes.includes(String(item.code))} onChange={(checked) => setCodes(checked ? [...codes, String(item.code)] : codes.filter((code) => code !== item.code))} />)}</div>
@@ -367,7 +430,7 @@ function UserRolesEditor({ row, onClose, onSaved }: EditorProps) {
     onSaved("用户角色已保存");
   }}>
     <p className="admin-editor-note">用户：{String(row.email || row.display_name)}。至少保留一个角色，已有角色的到期时间会保留。</p>
-    {error && <p role="alert">{error}</p>}
+    {error && <ToastMessage tone="error">{error}</ToastMessage>}
     {roles.map((role) => <Field key={String(role.id)} field={{ key: String(role.id), label: String(role.name), type: "checkbox", hint: String(role.description || "") }} value={assignments.some((item) => item.role_id === role.id)} onChange={(checked) => setAssignments(checked ? [...assignments, { role_id: role.id, expires_at: null }] : assignments.filter((item) => item.role_id !== role.id))} />)}
   </EditorForm>;
 }
@@ -395,7 +458,7 @@ export function PointAdjustments({ currentUserId, superAdmin, canAdjust, onSaved
   }
   useEffect(() => { void load(); }, []);
   return <section className="admin-related-section admin-editor-note"><h3>待处理积分调整</h3><p>超级管理员的调整直接生效。其他管理员的大额调整在这里处理。</p>
-    {error && <p role="alert">{error}<button type="button" className="admin-secondary-button" onClick={() => void load()}>重试</button></p>}
+    {error && <ToastMessage tone="error" action={<button type="button" className="admin-toast-action" onClick={() => void load()}>重试</button>}>{error}</ToastMessage>}
     {rows.map((row) => <div className="admin-adjustment-row" key={String(row.id)}><span>用户 {String(row.user_id)} · {String(row.amount)} 积分 · {String(row.reason)}</span>{canAdjust && (row.requested_by !== currentUserId || superAdmin) ? <><button className="admin-secondary-button" onClick={() => setSelected({ row, decision: "approve" })}>批准并入账</button><button className="admin-secondary-button" onClick={() => setSelected({ row, decision: "reject" })}>拒绝</button></> : <small>等待其他管理员处理</small>}</div>)}
     {!rows.length && !error && <p>没有待处理的积分调整</p>}{nextCursor && <button className="admin-secondary-button" onClick={() => void load(nextCursor)}>加载更多</button>}
     {selected && <EditorForm title={selected.decision === "approve" ? "批准积分调整" : "拒绝积分调整"} onClose={() => setSelected(null)} onSubmit={async () => {

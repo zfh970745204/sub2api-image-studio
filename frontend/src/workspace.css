@@ -263,13 +263,13 @@ img.admin-brand-mark { display: block; padding: 0; border: 0; background: transp
 .user-auth-panel .user-auth-submit { min-height: 46px; background: #292b40; color: #fff !important; border-color: #292b40; border-radius: 8px; }
 .user-auth-panel .user-auth-submit:hover { background: #3b3d55; }
 .user-auth-context { position: relative; isolation: isolate; padding: 56px; background: #141721; place-items: start; }
-.user-auth-artwork { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -1; }
-.user-auth-showcase { width: 100%; text-align: left; padding: 0; }
+.user-auth-artwork { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+.user-auth-showcase { position: relative; z-index: 2; width: 100%; text-align: left; padding: 0; }
 .user-auth-showcase > span { color: #a8b0c5; font-size: 9px; letter-spacing: 2.8px; }
 .user-auth-showcase h2 { margin: 34px 0 0; color: #eff1f8; font-weight: 400; font-size: clamp(28px, 3.1vw, 44px); line-height: 1.45; letter-spacing: 1px; }
 .user-auth-showcase h2 em { font-style: normal; color: #aeb8cf; }
 .user-auth-showcase p { color: #929db5; font-size: 12px; line-height: 1.9; margin-top: 18px; }
-.user-auth-caption { position: absolute; bottom: 32px; left: 56px; right: 56px; display: flex; justify-content: space-between; gap: 12px; color: #9ba6bf; font-size: 9px; letter-spacing: 1.7px; }
+.user-auth-caption { position: absolute; z-index: 2; bottom: 32px; left: 56px; right: 56px; display: flex; justify-content: space-between; gap: 12px; color: #9ba6bf; font-size: 9px; letter-spacing: 1.7px; }
 .user-auth-panel form small { color: var(--user-muted); font-size: 11px; }
 @media (max-width: 760px) {
   .user-creative-hero { min-height: 0; padding: 27px 25px 0; }

@@ -27,10 +27,11 @@ from app.repositories.models import (
     UserRole,
 )
 from app.services.auth import AuthService
-from app.services.image_executor import UpstreamCircuitBreaker
+from app.services.image_executor import ImageJobExecutor, UpstreamCircuitBreaker
 from app.services.jobs import JobService, RetryableJobError
 from app.services.rbac import sync_builtin_rbac
 from app.services.security import SecurityService
+from app.sub2api import Sub2APIError
 
 
 def test_prompt_guard_and_upstream_circuit_recovery() -> None:
@@ -54,6 +55,28 @@ def test_prompt_guard_and_upstream_circuit_recovery() -> None:
         "consecutive_failures": 0,
         "retry_after_seconds": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_sub2api_failover_uses_next_profile_after_transient_error() -> None:
+    class FakeClient:
+        def __init__(self, status: int | None = None) -> None:
+            self.status = status
+
+        async def generate(self) -> str:
+            if self.status is not None:
+                raise Sub2APIError("quota exceeded", status_code=self.status)
+            return "backup-result"
+
+    executor = ImageJobExecutor.__new__(ImageJobExecutor)
+    executor.profile_breakers = {}
+    executor.circuit_breaker = UpstreamCircuitBreaker()
+    result = await executor._call_with_failover(
+        [("primary", FakeClient(429)), ("backup", FakeClient())],
+        lambda client: client.generate(),
+    )
+    assert result == "backup-result"
+    assert executor.profile_breakers["primary"].consecutive_failures == 1
 
 
 @dataclass

@@ -47,6 +47,7 @@ import {
 } from "react";
 import { apiRequest, ApiRequestError } from "./admin-api";
 import { AdminEditor, DirectActionDialog, PointAdjustments, type EditorKind } from "./AdminEditors";
+import { ToastMessage } from "./Toast";
 
 type Row = Record<string, unknown>;
 
@@ -410,7 +411,7 @@ const MODULES: Record<Exclude<ModuleId, "dashboard">, ModuleDefinition> = {
       {
         key: "active.status",
         label: "生效状态",
-        render: (row) => !row.active_version ? "尚未配置" : row.code === "general" ? "已生效" : nested(row, "active.values.enabled") ? "已启用" : "已停用",
+        render: (row) => !row.active_version ? "尚未配置" : ["general", "branding"].includes(String(row.code)) ? "已生效" : nested(row, "active.values.enabled") ? "已启用" : "已停用",
       },
       {
         key: "latest_draft.status",
@@ -570,7 +571,7 @@ function AdminApp() {
             window.history.pushState({}, "", href);
             setModule(currentModule());
           }} />
-          <a className="admin-studio-link" href="/">
+          <a className="admin-studio-link" href="/app">
             <Images size={16} />
             <span>返回工作台</span>
           </a>
@@ -646,7 +647,7 @@ function AdminLogin({ onSuccess, error: initialError }: { onSuccess: () => Promi
           <h1>管理员登录</h1>
           <label>邮箱或用户名<input autoFocus autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required /></label>
           <label>密码<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-          {error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}
+          {error && <ToastMessage tone="error">{error}</ToastMessage>}
           <button className="admin-primary-button" disabled={submitting}>
             {submitting ? <RefreshCw className="spin" size={16} /> : <LogIn size={16} />}
             登录
@@ -907,7 +908,7 @@ function SmallEmpty() {
 }
 
 function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return <section className="admin-load-error"><CircleAlert size={23} /><div><strong>数据加载失败</strong><p>{message}</p></div><button className="admin-secondary-button" onClick={onRetry}><RefreshCw size={15} />重试</button></section>;
+  return <ToastMessage tone="error" action={<button className="admin-toast-action" onClick={onRetry}><RefreshCw size={14} />重试</button>}><strong>数据加载失败</strong><small>{message}</small></ToastMessage>;
 }
 
 function TableSkeleton() {
@@ -1036,7 +1037,7 @@ function ModuleTable({ module, definition, permissions, embedded = false, curren
   return (
     <div className={`admin-page ${embedded ? "is-embedded" : ""}`}>
       {!embedded && <PageHeading eyebrow={definition.eyebrow} title={definition.title}>
-        {notice && <span className="admin-notice"><Check size={14} />{notice}</span>}
+        {notice && <ToastMessage tone="success">{notice}</ToastMessage>}
         {canManage && module === "memberships" && <><button className="admin-primary-button" onClick={() => setEditor({ kind: "memberships", row: {} })}><Plus size={15} />新建套餐</button><button className="admin-secondary-button" onClick={() => setEditor({ kind: "user-membership", row: {} })}>分配用户会员</button></>}
         {canManage && module === "points" && <button className="admin-primary-button" onClick={() => setEditor({ kind: "points", row: {} })}><Plus size={15} />调整积分</button>}
         {canManage && module === "roles" && <button className="admin-primary-button" onClick={() => setEditor({ kind: "roles", row: {} })}><Plus size={15} />新建角色</button>}
@@ -1249,7 +1250,7 @@ function AuditWorkspace({ definition, permissions, currentUserId }: { definition
           <button className={tab === "requests" ? "is-active" : ""} onClick={() => setTab("requests")}>操作申请</button>
         </div>
       </PageHeading>
-      {error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}
+      {error && <ToastMessage tone="error">{error}</ToastMessage>}
       {tab === "logs" && <ModuleTable module="audit" definition={definition} permissions={permissions} embedded />}
       {tab === "events" && <SecurityEventsPanel canManage={permissions.has("security.policies.manage")} />}
       {tab === "blocks" && <SecurityBlocksPanel canManage={permissions.has("security.policies.manage")} />}
@@ -1312,7 +1313,7 @@ function SecurityResolveDialog({ row, onClose, onDone }: { row: Row; onClose: ()
     catch (caught) { setError(caught instanceof Error ? caught.message : "事件处置失败"); }
     finally { setSubmitting(false); }
   };
-  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon approve"><ShieldCheck size={20} /></span><div><p>安全事件处置</p><h2>{valueText(row.event_type)}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>处置结果<select value={resolution} onChange={(event) => setResolution(event.target.value as "resolved" | "ignored")}><option value="resolved">已解决</option><option value="ignored">确认忽略</option></select></label><label>处置原因<textarea autoFocus minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-primary-button" disabled={submitting || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Check size={15} />}确认处置</button></footer></form></div>;
+  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon approve"><ShieldCheck size={20} /></span><div><p>安全事件处置</p><h2>{valueText(row.event_type)}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>处置结果<select value={resolution} onChange={(event) => setResolution(event.target.value as "resolved" | "ignored")}><option value="resolved">已解决</option><option value="ignored">确认忽略</option></select></label><label>处置原因<textarea autoFocus minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <ToastMessage tone="error">{error}</ToastMessage>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-primary-button" disabled={submitting || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Check size={15} />}确认处置</button></footer></form></div>;
 }
 
 function SecurityBlocksPanel({ canManage }: { canManage: boolean }) {
@@ -1345,7 +1346,7 @@ function CreateBlockDialog({ onClose, onDone }: { onClose: () => void; onDone: (
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submit = async (event: FormEvent) => { event.preventDefault(); setSubmitting(true); setError(""); try { const duration = Number(hours); await apiRequest("/api/v1/admin/security/blocks", { method: "POST", body: JSON.stringify({ subject_type: subjectType, subject, reason, ends_at: duration > 0 ? new Date(Date.now() + duration * 3600000).toISOString() : null }) }); onDone(); } catch (caught) { setError(caught instanceof Error ? caught.message : "封禁创建失败"); } finally { setSubmitting(false); } };
-  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon"><Ban size={20} /></span><div><p>访问策略</p><h2>新增封禁</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>主体类型<select value={subjectType} onChange={(event) => setSubjectType(event.target.value as "user" | "ip_fingerprint")}><option value="user">用户 ID</option><option value="ip_fingerprint">IP 指纹</option></select></label><label>{subjectType === "user" ? "用户 ID" : "64 位 IP 哈希"}<input value={subject} onChange={(event) => setSubject(event.target.value)} required /></label><label>持续时间<select value={hours} onChange={(event) => setHours(event.target.value)}><option value="1">1 小时</option><option value="24">24 小时</option><option value="168">7 天</option><option value="720">30 天</option><option value="0">永久</option></select></label><label>封禁原因<textarea minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-danger-button" disabled={submitting || !subject.trim() || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Ban size={15} />}创建封禁</button></footer></form></div>;
+  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon"><Ban size={20} /></span><div><p>访问策略</p><h2>新增封禁</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>主体类型<select value={subjectType} onChange={(event) => setSubjectType(event.target.value as "user" | "ip_fingerprint")}><option value="user">用户 ID</option><option value="ip_fingerprint">IP 指纹</option></select></label><label>{subjectType === "user" ? "用户 ID" : "64 位 IP 哈希"}<input value={subject} onChange={(event) => setSubject(event.target.value)} required /></label><label>持续时间<select value={hours} onChange={(event) => setHours(event.target.value)}><option value="1">1 小时</option><option value="24">24 小时</option><option value="168">7 天</option><option value="720">30 天</option><option value="0">永久</option></select></label><label>封禁原因<textarea minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <ToastMessage tone="error">{error}</ToastMessage>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-danger-button" disabled={submitting || !subject.trim() || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Ban size={15} />}创建封禁</button></footer></form></div>;
 }
 
 function RateLimitsPanel({ canManage }: { canManage: boolean }) {
@@ -1366,13 +1367,13 @@ function RateLimitDialog({ row, onClose, onDone }: { row: Row; onClose: () => vo
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submit = async (event: FormEvent) => { event.preventDefault(); setSubmitting(true); setError(""); try { await apiRequest(`/api/v1/admin/security/rate-limits/${row.code}`, { method: "PATCH", body: JSON.stringify({ request_limit: Number(limit), window_seconds: Number(windowSeconds), enabled, reason }) }); onDone(); } catch (caught) { setError(caught instanceof Error ? caught.message : "策略更新失败"); } finally { setSubmitting(false); } };
-  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon approve"><SlidersHorizontal size={20} /></span><div><p>限流策略</p><h2>{valueText(row.name)}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>请求阈值<input type="number" min="1" max="1000000" value={limit} onChange={(event) => setLimit(event.target.value)} required /></label><label>时间窗口（秒）<input type="number" min="1" max="86400" value={windowSeconds} onChange={(event) => setWindowSeconds(event.target.value)} required /></label><label className="admin-confirm-check"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span><Check size={13} /></span><strong>启用该策略</strong></label><label>变更原因<textarea minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-primary-button" disabled={submitting || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Save size={15} />}保存策略</button></footer></form></div>;
+  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon approve"><SlidersHorizontal size={20} /></span><div><p>限流策略</p><h2>{valueText(row.name)}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>请求阈值<input type="number" min="1" max="1000000" value={limit} onChange={(event) => setLimit(event.target.value)} required /></label><label>时间窗口（秒）<input type="number" min="1" max="86400" value={windowSeconds} onChange={(event) => setWindowSeconds(event.target.value)} required /></label><label className="admin-confirm-check"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span><Check size={13} /></span><strong>启用该策略</strong></label><label>变更原因<textarea minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <ToastMessage tone="error">{error}</ToastMessage>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-primary-button" disabled={submitting || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Save size={15} />}保存策略</button></footer></form></div>;
 }
 
 function ReasonDialog({ title, actionLabel, endpoint, onClose, onDone }: { title: string; actionLabel: string; endpoint: string; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState(""); const [error, setError] = useState(""); const [submitting, setSubmitting] = useState(false);
   const submit = async (event: FormEvent) => { event.preventDefault(); setSubmitting(true); setError(""); try { await apiRequest(endpoint, { method: "POST", body: JSON.stringify({ reason }) }); onDone(); } catch (caught) { setError(caught instanceof Error ? caught.message : "操作失败"); } finally { setSubmitting(false); } };
-  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon"><CircleAlert size={20} /></span><div><p>安全策略变更</p><h2>{title}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>操作原因<textarea autoFocus minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-danger-button" disabled={submitting || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Check size={15} />}{actionLabel}</button></footer></form></div>;
+  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className="admin-risk-icon"><CircleAlert size={20} /></span><div><p>安全策略变更</p><h2>{title}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><label>操作原因<textarea autoFocus minLength={3} maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{error && <ToastMessage tone="error">{error}</ToastMessage>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className="admin-danger-button" disabled={submitting || reason.trim().length < 3}>{submitting ? <RefreshCw className="spin" size={15} /> : <Check size={15} />}{actionLabel}</button></footer></form></div>;
 }
 
 function RecordDetailDrawer({ eyebrow, row, onClose }: { eyebrow: string; row: Row; onClose: () => void }) {
@@ -1452,7 +1453,7 @@ function ReviewDialog({ row, decision, onClose, onReviewed }: { row: Row; decisi
       setSubmitting(false);
     }
   };
-  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className={`admin-risk-icon ${approving ? "approve" : ""}`}>{approving ? <CheckCircle2 size={20} /> : <XCircle size={20} />}</span><div><p>操作申请审批</p><h2>{approving ? "批准申请" : "拒绝申请"}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><div className="admin-confirm-target"><span>申请动作</span><code>{String(row.action_type)}</code></div><label>审批原因<textarea autoFocus value={reason} onChange={(event) => setReason(event.target.value)} minLength={3} maxLength={500} required /></label>{error && <div className="admin-form-error"><CircleAlert size={15} />{error}</div>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className={approving ? "admin-primary-button" : "admin-danger-button"} disabled={reason.trim().length < 3 || submitting}>{submitting ? <RefreshCw className="spin" size={15} /> : approving ? <Check size={15} /> : <X size={15} />}{approving ? "批准申请" : "拒绝申请"}</button></footer></form></div>;
+  return <div className="admin-modal-layer"><button className="admin-modal-scrim" aria-label="关闭" onClick={onClose} /><form className="admin-confirm-dialog" onSubmit={submit}><header><span className={`admin-risk-icon ${approving ? "approve" : ""}`}>{approving ? <CheckCircle2 size={20} /> : <XCircle size={20} />}</span><div><p>操作申请审批</p><h2>{approving ? "批准申请" : "拒绝申请"}</h2></div><button type="button" className="admin-icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header><div className="admin-confirm-target"><span>申请动作</span><code>{String(row.action_type)}</code></div><label>审批原因<textarea autoFocus value={reason} onChange={(event) => setReason(event.target.value)} minLength={3} maxLength={500} required /></label>{error && <ToastMessage tone="error">{error}</ToastMessage>}<footer><button type="button" className="admin-secondary-button" onClick={onClose}>取消</button><button className={approving ? "admin-primary-button" : "admin-danger-button"} disabled={reason.trim().length < 3 || submitting}>{submitting ? <RefreshCw className="spin" size={15} /> : approving ? <Check size={15} /> : <X size={15} />}{approving ? "批准申请" : "拒绝申请"}</button></footer></form></div>;
 }
 
 export default AdminApp;

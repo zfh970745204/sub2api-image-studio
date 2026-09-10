@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy import update
@@ -26,7 +27,10 @@ from app.object_storage import ObjectStorage, ObjectStorageError
 from app.repositories.models import ImageJob
 from app.services.asset_files import AssetInputError, prepare_asset
 from app.services.assets import AssetService
-from app.services.configuration import RuntimeConfigCache, sub2api_settings
+from app.services.configuration import (
+    RuntimeConfigCache,
+    sub2api_profile_settings,
+)
 from app.services.jobs import ClaimedJob, PermanentJobError, RetryableJobError
 from app.services.security import SecurityService
 from app.sub2api import Sub2APIClient, Sub2APIError
@@ -107,6 +111,7 @@ class ImageJobExecutor:
         self.sub2api = sub2api or Sub2APIClient(settings)
         self.config_cache = config_cache
         self.circuit_breaker = UpstreamCircuitBreaker()
+        self.profile_breakers: dict[str, UpstreamCircuitBreaker] = {"default": self.circuit_breaker}
 
     async def __call__(self, claim: ClaimedJob) -> dict[str, Any]:
         started = time.perf_counter()
@@ -228,7 +233,7 @@ class ImageJobExecutor:
         operation = claim.operation_code
         parameters = claim.parameters
         if operation == "ai.generate":
-            sub2api = await self._sub2api_client(claim)
+            clients = await self._sub2api_clients(claim)
             prompt = self._required_text(parameters, "prompt")
             size = self._choice(
                 parameters, "size", "1024x1024", {"auto", "1024x1024", "1024x1536", "1536x1024"}
@@ -239,13 +244,14 @@ class ImageJobExecutor:
             output_format = self._choice(
                 parameters, "output_format", "png", {"png", "jpeg", "webp"}
             )
-            upstream = await self._upstream(
-                sub2api.generate(
+            upstream = await self._call_with_failover(
+                clients,
+                lambda client: client.generate(
                     prompt=prompt,
                     size=size,
                     quality=quality,
                     output_format=output_format,
-                )
+                ),
             )
             return (
                 upstream.data,
@@ -255,7 +261,7 @@ class ImageJobExecutor:
             )
         if operation in AI_EDIT_PROMPTS:
             self._require_source(source)
-            sub2api = await self._sub2api_client(claim)
+            clients = await self._sub2api_clients(claim)
             instruction = str(
                 parameters.get("instruction") or parameters.get("prompt") or ""
             ).strip()
@@ -280,8 +286,9 @@ class ImageJobExecutor:
                 raise PermanentJobError("MASK_REQUIRED", "该操作必须提供 mask_asset_id")
             if mask is not None:
                 await asyncio.to_thread(validate_edit_mask, source, mask)
-            upstream = await self._upstream(
-                sub2api.edit(
+            upstream = await self._call_with_failover(
+                clients,
+                lambda client: client.edit(
                     image_png=source,
                     mask_png=mask,
                     prompt=prompt,
@@ -295,7 +302,7 @@ class ImageJobExecutor:
                         parameters, "quality", "high", {"auto", "low", "medium", "high"}
                     ),
                     output_format="png",
-                )
+                ),
             )
             await self._progress(claim, 65)
             if operation == "ai.extract_print":
@@ -375,9 +382,30 @@ class ImageJobExecutor:
             raise PermanentJobError("MASK_ASSET_INTEGRITY_ERROR", "遮罩素材完整性校验失败")
         return data
 
-    async def _upstream(self, awaitable):
+    def _breaker(self, profile_id: str) -> UpstreamCircuitBreaker:
+        if profile_id not in self.profile_breakers:
+            self.profile_breakers[profile_id] = UpstreamCircuitBreaker()
+        return self.profile_breakers[profile_id]
+
+    async def _call_with_failover(
+        self,
+        clients: list[tuple[str, Sub2APIClient]],
+        call: Callable[[Sub2APIClient], Awaitable[Any]],
+    ) -> Any:
+        last_error: RetryableJobError | None = None
+        for profile_id, client in clients:
+            try:
+                return await self._upstream(call(client), profile_id=profile_id)
+            except RetryableJobError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise PermanentJobError("SUB2API_NOT_CONFIGURED", "Sub2API 尚未配置")
+
+    async def _upstream(self, awaitable, *, profile_id: str = "default"):
+        breaker = self._breaker(profile_id)
         try:
-            self.circuit_breaker.before_call()
+            breaker.before_call()
         except RetryableJobError:
             close = getattr(awaitable, "close", None)
             if close is not None:
@@ -386,17 +414,23 @@ class ImageJobExecutor:
         try:
             result = await awaitable
         except Sub2APIError as exc:
-            if exc.status_code == 429 or exc.status_code >= 500:
-                if self.circuit_breaker.failed():
+            message = str(exc).lower()
+            transient = (
+                exc.status_code in {402, 408, 425, 429}
+                or exc.status_code >= 500
+                or any(word in message for word in ("quota", "rate limit", "ratelimit", "credit", "balance", "insufficient", "limit reached"))
+            )
+            if transient:
+                if breaker.failed():
                     raise RetryableJobError(
                         "SUB2API_CIRCUIT_OPEN", "上游图片服务熔断保护中"
                     ) from exc
                 raise RetryableJobError("SUB2API_UNAVAILABLE", "上游图片服务暂时不可用") from exc
             raise PermanentJobError("SUB2API_REQUEST_REJECTED", "上游图片请求被拒绝") from exc
-        self.circuit_breaker.succeeded()
+        breaker.succeeded()
         return result
 
-    async def _sub2api_client(self, claim: ClaimedJob) -> Sub2APIClient:
+    async def _sub2api_clients(self, claim: ClaimedJob) -> list[tuple[str, Sub2APIClient]]:
         if self.config_cache is not None and claim.sub2api_config_version is not None:
             try:
                 config = await self.config_cache.get("sub2api", claim.sub2api_config_version)
@@ -404,13 +438,18 @@ class ImageJobExecutor:
                 raise PermanentJobError(
                     "SUB2API_CONFIG_UNAVAILABLE", "任务绑定的 Sub2API 配置版本不可用"
                 ) from exc
-            adapter = sub2api_settings(config)
-            if not adapter.sub2api_configured:
+            adapters = sub2api_profile_settings(config)
+            if not adapters:
                 raise PermanentJobError("SUB2API_NOT_CONFIGURED", "Sub2API 尚未配置")
-            return Sub2APIClient(adapter)
+            return [(adapter.profile_id, Sub2APIClient(adapter)) for adapter in adapters]
         if not self.settings.sub2api_configured:
             raise PermanentJobError("SUB2API_NOT_CONFIGURED", "Sub2API 尚未配置")
-        return self.sub2api
+        return [("default", self.sub2api)]
+
+    async def _sub2api_client(self, claim: ClaimedJob) -> Sub2APIClient:
+        """Compatibility helper for integrations that inspect the primary client."""
+        clients = await self._sub2api_clients(claim)
+        return clients[0][1]
 
     @staticmethod
     def _require_source(source: bytes | None) -> None:

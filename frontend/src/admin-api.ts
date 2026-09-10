@@ -19,8 +19,13 @@ export async function apiRequest<T>(url: string, init?: RequestInit): Promise<T>
     const errors = Array.isArray(payload.detail) ? payload.detail : Array.isArray(payload.details) ? payload.details : [];
     const detail = errors.map((item: { msg?: string; message?: string; field?: string }) =>
       `${item.field ? `${item.field}: ` : ""}${item.message || item.msg || "字段无效"}`).join("；");
+    const detailObject = payload.details && typeof payload.details === "object" && !Array.isArray(payload.details)
+      ? payload.details as { keys?: unknown }
+      : null;
+    const missingKeys = Array.isArray(detailObject?.keys) ? detailObject.keys.filter((key): key is string => typeof key === "string") : [];
+    const detailSummary = missingKeys.length ? `缺少配置项：${missingKeys.join("、")}` : detail;
     throw new ApiRequestError(response.status,
-      [payload.message || (typeof payload.detail === "string" ? payload.detail : payload.detail?.message), detail].filter(Boolean).join("：") || `请求失败（${response.status}）`);
+      [payload.message || (typeof payload.detail === "string" ? payload.detail : payload.detail?.message), detailSummary].filter(Boolean).join("：") || `请求失败（${response.status}）`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

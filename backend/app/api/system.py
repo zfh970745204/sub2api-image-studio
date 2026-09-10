@@ -10,7 +10,12 @@ from app.api.dependencies import Principal, get_current_principal, require_permi
 from app.config import Settings
 from app.repositories.service_instances import list_recent_instances
 from app.schemas import HealthResponse
-from app.services.configuration import runtime_config_value
+from app.services.configuration import (
+    runtime_config_value,
+)
+from app.services.configuration import (
+    sub2api_configured as is_sub2api_configured,
+)
 from app.services.runtime import RuntimeServices
 
 public_router = APIRouter(prefix="/api", tags=["system"])
@@ -48,11 +53,7 @@ async def system_status(
     )
     try:
         sub2api_config = await _runtime(request).config_cache.get("sub2api")
-        sub2api_configured = bool(
-            sub2api_config.values.get("enabled")
-            and sub2api_config.values.get("base_url")
-            and sub2api_config.secrets.get("api_key")
-        )
+        sub2api_configured = is_sub2api_configured(sub2api_config)
     except Exception:  # noqa: BLE001
         sub2api_configured = settings.sub2api_configured
     return {
