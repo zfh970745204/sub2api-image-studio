@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1200" viewBox="0 0 1000 1200" fill="none">
+  <title>Atmosphere — 流动的光谱</title>
+  <defs>
+    <radialGradient id="a" cx=".52" cy=".49" r=".65"><stop stop-color="#32364f"/><stop offset="1" stop-color="#11131d"/></radialGradient>
+    <radialGradient id="h"><stop stop-color="#7f80b8" stop-opacity=".25"/><stop offset="1" stop-color="#11131d" stop-opacity="0"/></radialGradient>
+    <linearGradient id="r" x1="185" y1="350" x2="794" y2="845" gradientUnits="userSpaceOnUse"><stop stop-color="#606d94"/><stop offset=".19" stop-color="#e2e9ef"/><stop offset=".3" stop-color="#a9b1d0"/><stop offset=".4" stop-color="#383e60"/><stop offset=".5" stop-color="#151d34"/><stop offset=".66" stop-color="#a99bbb"/><stop offset=".76" stop-color="#efdfdf"/><stop offset=".86" stop-color="#8a9bbb"/><stop offset="1" stop-color="#2d3b59"/></linearGradient>
+    <linearGradient id="s" x1="302" y1="530" x2="730" y2="809" gradientUnits="userSpaceOnUse"><stop stop-color="#141d32"/><stop offset=".2" stop-color="#647391"/><stop offset=".42" stop-color="#d6dbe8"/><stop offset=".54" stop-color="#a8b0c5"/><stop offset=".72" stop-color="#3b455e"/><stop offset="1" stop-color="#121a2b"/></linearGradient>
+    <linearGradient id="l" x1="300" y1="356" x2="758" y2="924" gradientUnits="userSpaceOnUse"><stop stop-color="#f2f5ff" stop-opacity=".85"/><stop offset=".35" stop-color="#adbce7" stop-opacity=".1"/><stop offset=".7" stop-color="#f2dfe8" stop-opacity=".9"/><stop offset="1" stop-color="#dce1ff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#edf2ff" stop-opacity=".23"/><stop offset=".5" stop-color="#c6cefa" stop-opacity=".025"/><stop offset="1" stop-color="#c6cefa" stop-opacity=".17"/></linearGradient>
+    <filter id="blur" x="-.5" y="-.5" width="2" height="2"><feGaussianBlur stdDeviation="30"/></filter>
+  </defs>
+  <path fill="url(#a)" d="M0 0h1000v1200H0z"/>
+  <ellipse cx="517" cy="622" rx="491" ry="493" fill="url(#h)"/>
+  <g stroke="#bec9ec" stroke-opacity=".08"><path d="M90 0V1200M910 0V1200M0 265H1000M0 977H1000"/><circle cx="500" cy="616" r="365"/><circle cx="500" cy="616" r="275" stroke-dasharray="2 9"/></g>
+  <rect x="237" y="327" width="508" height="570" rx="150" transform="rotate(30 491 612)" stroke="url(#b)"/>
+  <ellipse cx="515" cy="943" rx="200" ry="27" fill="#050912" filter="url(#blur)"/>
+  <path d="M710 360C584 283 392 363 291 495C162 663 245 862 421 898C579 931 779 802 802 648C820 522 717 479 622 547C526 617 500 771 390 716C316 680 411 461 710 360Z" fill="url(#r)"/>
+  <path d="M710 360C584 339 416 433 351 544C302 627 319 694 390 716C500 771 526 617 622 547C689 499 761 506 791 580C765 541 704 566 674 629C612 759 550 867 421 852C329 841 257 756 263 667C254 819 361 916 490 897C633 876 780 780 802 648C820 522 717 479 622 547C659 469 689 416 710 360Z" fill="url(#s)"/>
+  <path d="M710 360C584 283 392 363 291 495C162 663 245 862 421 898C579 931 779 802 802 648" stroke="url(#l)" stroke-width="1.6"/>
+  <path d="M710 360C584 339 416 433 351 544C302 627 319 694 390 716" stroke="url(#l)" stroke-width="1.3"/>
+  <path d="M622 547C689 499 761 506 791 580" stroke="#d5dff2" stroke-opacity=".6"/>
+  <path d="M279 514C373 376 528 294 645 330" stroke="#d5e1ff" stroke-opacity=".14" stroke-width="13" filter="url(#blur)"/>
+  <path d="M411 898C574 932 737 812 778 724" stroke="#d5c7ed" stroke-opacity=".3" stroke-width="13" filter="url(#blur)"/>
+  <g stroke="#c0cae6" stroke-opacity=".5"><path d="M78 265H102M90 253V277M898 977H922M910 965V989"/><circle cx="812" cy="357" r="4"/></g>
+  <circle cx="188" cy="844" r="3" fill="#a6b8db" fill-opacity=".6"/>
+</svg>

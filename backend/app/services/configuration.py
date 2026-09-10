@@ -8,6 +8,7 @@ import hmac
 import logging
 import os
 import smtplib
+import ssl
 import time
 import uuid
 from dataclasses import dataclass
@@ -959,6 +960,13 @@ class ConfigConnectionTester:
                 await self._test_r2(config)
             elif config.group == "email":
                 await self._test_email(config)
+                if config.values["provider"] == "api":
+                    return self._outcome(
+                        started,
+                        True,
+                        "EMAIL_API_REACHABLE",
+                        "邮件接口可达；此检查未发送邮件，发信授权和投递结果请通过注册验证码确认",
+                    )
             else:
                 return self._outcome(started, True, "VALID", "业务配置校验通过")
         except Exception as exc:  # noqa: BLE001
@@ -1005,18 +1013,25 @@ class ConfigConnectionTester:
                     config.values["api_base_url"],
                     headers={"Authorization": f"Bearer {config.secrets['api_key']}"},
                 )
-                response.raise_for_status()
+                # Send-only endpoints often reject GET. A 405 proves reachability,
+                # not send authorization; never send unsolicited test mail here.
+                if response.status_code != 405:
+                    response.raise_for_status()
             return
 
         def connect() -> None:
-            with smtplib.SMTP(
-                config.values["host"],
-                int(config.values["port"]),
-                timeout=self.settings.dependency_timeout_seconds,
-            ) as client:
+            port = int(config.values["port"])
+            context = ssl.create_default_context()
+            arguments = {"timeout": self.settings.dependency_timeout_seconds}
+            connection = (
+                smtplib.SMTP_SSL(config.values["host"], port, context=context, **arguments)
+                if port == 465
+                else smtplib.SMTP(config.values["host"], port, **arguments)
+            )
+            with connection as client:
                 client.ehlo()
-                if config.values["use_tls"]:
-                    client.starttls()
+                if port != 465 and config.values["use_tls"]:
+                    client.starttls(context=context)
                     client.ehlo()
                 if config.values["username"]:
                     client.login(config.values["username"], config.secrets.get("password", ""))

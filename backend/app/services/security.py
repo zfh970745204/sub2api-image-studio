@@ -30,6 +30,8 @@ SENSITIVE_KEYS = frozenset(
         "secret",
         "secret_access_key",
         "token",
+        "verification_code",
+        "code_hash",
     }
 )
 
@@ -46,6 +48,7 @@ class PolicyDefault:
 POLICY_DEFAULTS = (
     PolicyDefault("login", "登录", "ip", 25, 900),
     PolicyDefault("register", "公开注册", "ip", 5, 3600),
+    PolicyDefault("register_email", "注册验证码发送", "ip", 10, 3600),
     PolicyDefault("upload", "素材上传", "both", 20, 3600),
     PolicyDefault("job_create", "任务创建", "both", 30, 60),
     PolicyDefault("quote", "任务报价", "both", 60, 60),

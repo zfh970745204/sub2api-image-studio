@@ -221,6 +221,20 @@ class RateLimitPolicy(Base):
     )
 
 
+class RegistrationChallenge(Base):
+    __tablename__ = "registration_challenges"
+
+    email: Mapped[str] = mapped_column(EMAIL_VALUE, primary_key=True)
+    nonce: Mapped[str] = mapped_column(String(32), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    send_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (

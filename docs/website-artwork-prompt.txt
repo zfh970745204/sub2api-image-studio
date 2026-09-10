@@ -1,7 +1,8 @@
-Use case: product-mockup
-Asset type: website artwork for a print-on-demand image editing studio
-Primary request: A refined editorial still life showing a botanical print design as a flat art print, on a folded cream cotton T-shirt, and on a ceramic mug. The same original terracotta and lilac wildflower illustration must appear consistently across all three products, with sage green leaves and warm ivory ink.
-Scene/backdrop: seamless deep muted plum studio backdrop, softly lit with ample breathing room.
-Style/medium: premium product photography, realistic cotton and unglazed ceramic texture, restrained warm lighting, tactile paper, natural soft shadows, crisp print detail.
-Composition/framing: balanced landscape composition with the three products fully visible, slight overlap and depth, no clipped products, no busy props, art print upright behind the products.
-Constraints: original artwork only; no text, no logos, no watermark, no invented UI.
+Use case: stylized-concept
+Asset type: brand artwork for a professional image creation studio
+Primary request: A sculptural folded silver ribbon floating within translucent glass image frames.
+Scene/backdrop: deep charcoal blue, subtle atmospheric light, quiet gallery space.
+Style/medium: refined studio rendering, smooth metallic reflections, restrained pearl and lilac highlights.
+Composition/framing: one complete sculptural form, generous negative space, clean silhouette; landscape for home, portrait with clear space above for login copy.
+Lighting/mood: broad softbox light, subtle rim light, delicate contact shadow, understated and precise.
+Constraints: original artwork; no text, logos, watermark, cartoons, flowers, clothing or mugs.

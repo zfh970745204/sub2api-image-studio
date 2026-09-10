@@ -76,10 +76,10 @@ const CONFIG_FIELDS: Record<string, FieldDefinition[]> = {
     { key: "enabled", label: "启用邮件服务", type: "checkbox" },
     { key: "provider", label: "邮件服务类型", options: [["smtp", "SMTP"], ["api", "邮件 API"]] },
     { key: "host", label: "SMTP 主机", required: false },
-    { key: "port", label: "SMTP 端口", type: "number", min: 1, max: 65535 },
+    { key: "port", label: "SMTP 端口", type: "number", min: 1, max: 65535, hint: "465 自动使用 SSL；587 通常开启 STARTTLS" },
     { key: "username", label: "SMTP 用户名", required: false },
     { key: "use_tls", label: "使用 STARTTLS", type: "checkbox" },
-    { key: "api_base_url", label: "邮件 API 地址", required: false },
+    { key: "api_base_url", label: "邮件 API 地址", required: false, hint: "完整发信接口地址。POST JSON 字段为 from、to（数组）、subject、text；使用 Bearer API Key。" },
     { key: "from_email", label: "发件人邮箱", required: false },
   ],
   general: [
@@ -124,7 +124,7 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
     onSaved("配置已保存并生效");
   }}>
     <p className="admin-editor-note">填写配置后点击“保存并生效”。密钥留空保留原值，保存后可测试连接。</p>
-    {code === "general" && <p className="admin-editor-note">公开注册用户自动获得普通用户权限、下方默认会员和赠送积分；邮件自助找回暂未开放。</p>}
+    {code === "general" && <p className="admin-editor-note">公开注册必须先通过邮箱验证码验证。请在“邮件服务”配置发信渠道；验证成功后获得普通用户权限、默认会员和赠送积分。邮件自助找回暂未开放。</p>}
     <Fields fields={fields} values={values} setValues={setValues} />
     {(SECRET_FIELDS[code] || []).filter(([key]) => code !== "email" || key === (values.provider === "api" ? "api_key" : "password")).map(([key, label]) => {
       const stored = objectValue(objectValue(active.secrets)[key]);

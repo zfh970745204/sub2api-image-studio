@@ -163,9 +163,9 @@ function navigate(path: string): void {
 }
 
 function usePathname(): string {
-  const [pathname, setPathname] = useState(window.location.pathname);
+  const [pathname, setPathname] = useState(window.location.pathname + window.location.search);
   useEffect(() => {
-    const update = () => setPathname(window.location.pathname);
+    const update = () => setPathname(window.location.pathname + window.location.search);
     window.addEventListener("popstate", update);
     return () => window.removeEventListener("popstate", update);
   }, []);
@@ -207,7 +207,7 @@ function operationName(code: string): string {
 }
 
 function UserApp() {
-  const pathname = usePathname();
+  const pathname = usePathname().split("?")[0];
   if (pathname === "/forgot-password") return <ForgotPasswordPage />;
   if (pathname === "/login") return <LoginPage />;
   if (pathname === "/register") return <RegisterPage />;
@@ -295,7 +295,9 @@ function LoginPage() {
         </button>
       </section>
       <aside className="user-auth-context" aria-label="工作台能力">
-        <div className="user-auth-showcase"><span>FROM ARTWORK TO ANYTHING</span><h2>让每一份创意，<br />拥有更多可能。</h2><img src="/studio-collection.svg" alt="植物印花及其 T 恤、杯子应用示意" width="720" height="520" /><p>提取一枚印花，打磨一张图片，<br />让设计从屏幕走向你的下一件产品。</p></div>
+        <img className="user-auth-artwork" src="/studio-atmosphere.svg" alt="银色光谱雕塑，在深色空间中流动交叠" width="1000" height="1200" />
+        <div className="user-auth-showcase"><span>SUB2IMAGE / CREATIVE STUDIO</span><h2>让想象成形。<br /><em>让细节出众。</em></h2><p>从第一道灵感，到最后一处精修。<br />你的下一件作品，从这里开始。</p></div>
+        <div className="user-auth-caption"><span>01 — LIGHT IN MOTION</span><span>构想 · 提取 · 精修</span></div>
       </aside>
     </main>
   );
@@ -307,10 +309,39 @@ function RegisterPage() {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [code, setCode] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sentTo, setSentTo] = useState("");
+  const [retryAt, setRetryAt] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const sendInFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const submitting = useRef(false);
+  useEffect(() => {
+    const tick = () => setSecondsLeft(Math.max(0, Math.ceil((retryAt - Date.now()) / 1000)));
+    tick();
+    if (!retryAt) return;
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [retryAt]);
+  async function sendCode() {
+    if (sendInFlight.current || retryAt > Date.now() || !emailRef.current?.reportValidity()) return;
+    sendInFlight.current = true; setSending(true); setError("");
+    const recipient = email.trim().toLowerCase();
+    try {
+      const result = await api.sendRegistrationCode(recipient);
+      setSentTo(recipient);
+      setSecondsLeft(result.retry_after_seconds);
+      setRetryAt(Date.now() + result.retry_after_seconds * 1000);
+    } catch (reason) {
+      setError(messageOf(reason, "验证码发送失败"));
+      if (reason instanceof ApiError && reason.retryAfter) { setSecondsLeft(reason.retryAfter); setRetryAt(Date.now() + reason.retryAfter * 1000); }
+      if (reason instanceof ApiError && reason.code === "REGISTRATION_CLOSED") setEnabled(false);
+    } finally { sendInFlight.current = false; setSending(false); }
+  }
   useEffect(() => {
     let active = true;
     setError("");
@@ -324,7 +355,7 @@ function RegisterPage() {
     if (password !== confirmation) { setError("两次输入的密码不一致"); return; }
     submitting.current = true;
     setBusy(true); setError("");
-    try { await api.register(email.trim(), name.trim(), password); navigate("/app"); }
+    try { await api.register(email.trim(), name.trim(), password, code); navigate("/app"); }
     catch (reason) {
       setError(messageOf(reason, "注册失败"));
       if (reason instanceof ApiError && reason.code === "REGISTRATION_CLOSED") setEnabled(false);
@@ -332,14 +363,16 @@ function RegisterPage() {
   }
   return <main className="user-auth-page compact"><section className="user-auth-panel" aria-labelledby="register-title">
     <Brand />
-    <div className="user-auth-heading"><span>让创意成为作品</span><h1 id="register-title">创建账号</h1><p>一个账号，开启你的图片创作工作台。</p></div>
+    <div className="user-auth-heading"><span>让创意成为作品</span><h1 id="register-title">创建账号</h1><p>验证你的邮箱，开启图片创作工作台。</p></div>
     {enabled === false ? <InlineMessage tone="warning">管理员已关闭注册，请联系管理员开通账号。</InlineMessage>
       : enabled === null ? !error && <MiniLoading /> : <form onSubmit={(event) => void submit(event)}>
         <label><span>显示名称</span><input autoComplete="nickname" maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label><span>邮箱</span><input autoComplete="email" type="email" maxLength={320} required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <label><span>邮箱</span><input ref={emailRef} disabled={sending || busy} autoComplete="email" type="email" maxLength={320} required value={email} onChange={(event) => { setEmail(event.target.value); setCode(""); setSentTo(""); }} /></label>
+        <div className="user-verification-field"><label><span>邮箱验证码</span><input autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} required value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} placeholder="6 位数字" /></label><button className="user-secondary" disabled={sending || busy || secondsLeft > 0 || !email.trim()} onClick={() => void sendCode()} type="button">{sending ? "正在发送…" : secondsLeft > 0 ? `${secondsLeft} 秒后重发` : sentTo ? "重新发送" : "获取验证码"}</button></div>
+        {sentTo && <p className="user-code-notice" role="status">验证码已发送至 {sentTo}，10 分钟内有效。未收到时请检查垃圾邮件。</p>}
         <label><span>密码</span><input autoComplete="new-password" type="password" minLength={12} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} /><small>12–128 个字符，建议使用较长的独立密码。</small></label>
         <label><span>确认密码</span><input autoComplete="new-password" type="password" minLength={12} maxLength={128} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
-        <button className="user-primary user-auth-submit" disabled={busy} type="submit">{busy ? <LoaderCircle className="spin" size={18} /> : <UserRound size={18} />}{busy ? "正在创建" : "注册并进入工作台"}</button>
+        <button className="user-primary user-auth-submit" disabled={busy || sending} type="submit">{busy ? <LoaderCircle className="spin" size={18} /> : <UserRound size={18} />}{busy ? "正在创建" : "注册并进入工作台"}</button>
       </form>}
     {error && <InlineMessage tone="error">{error}</InlineMessage>}
     {error && enabled === null && <button className="user-secondary" onClick={() => setRevision((value) => value + 1)} type="button">重新加载注册状态</button>}
@@ -470,7 +503,7 @@ function AppShell({
   }
 
   const page = (() => {
-    if (route === "studio") return <StudioPage bootstrap={bootstrap} onBootstrap={onBootstrap} />;
+    if (route === "studio") return <StudioPage key={window.location.search} bootstrap={bootstrap} onBootstrap={onBootstrap} />;
     if (route === "assets") return <AssetsPage bootstrap={bootstrap} />;
     if (route === "jobs") return <JobsPage />;
     if (route === "points") return <PointsPage bootstrap={bootstrap} />;
@@ -517,7 +550,7 @@ function AppShell({
             </button>
             <span className="user-plan-badge"><BadgeCheck size={15} />{bootstrap.membership.plan.name}</span>
             <div className="user-notification-wrap">
-              <button aria-label="任务通知" className="user-icon-button" onClick={() => setNotificationsOpen((value) => !value)} title="任务通知" type="button">
+              <button aria-label="任务通知" aria-expanded={notificationsOpen} aria-controls="user-notifications" className="user-icon-button" onClick={() => setNotificationsOpen((value) => !value)} title="任务通知" type="button">
                 <Bell size={18} />
                 {bootstrap.notifications.unread_count > 0 && <i>{Math.min(99, bootstrap.notifications.unread_count)}</i>}
               </button>
@@ -551,11 +584,24 @@ function NotificationPanel({
 }) {
   const [items, setItems] = useState<UserNotification[] | null>(null);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
-    api.notifications().then((payload) => setItems(payload.items)).catch((reason) => setError(messageOf(reason)));
+    let active = true;
+    const previous = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onCloseRef.current(); };
+    const closeOutside = (event: PointerEvent) => { if (event.target instanceof Element && !event.target.closest(".user-notification-wrap")) onCloseRef.current(); };
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("pointerdown", closeOutside);
+    void api.notifications().then((payload) => { if (active) setItems(payload.items); }).catch((reason) => { if (active) setError(messageOf(reason)); });
+    return () => { active = false; document.removeEventListener("keydown", closeOnEscape); document.removeEventListener("pointerdown", closeOutside); previous?.focus(); };
   }, []);
 
   async function read(item: UserNotification) {
+    setError("");
     if (!item.read_at) {
       await api.readNotification(item.id);
       setItems((current) => current?.map((value) => value.id === item.id ? { ...value, read_at: new Date().toISOString() } : value) || []);
@@ -569,24 +615,26 @@ function NotificationPanel({
   }
 
   async function readAll() {
+    setError("");
     await api.readAllNotifications();
     setItems((current) => current?.map((item) => ({ ...item, read_at: item.read_at || new Date().toISOString() })) || []);
     onBootstrap({ ...bootstrap, notifications: { unread_count: 0 } });
   }
 
   return (
-    <section className="user-notifications" aria-label="通知">
-      <header><strong>通知</strong><button disabled={!bootstrap.notifications.unread_count} onClick={() => void readAll()} type="button">全部已读</button></header>
-      {error ? <InlineMessage tone="error">{error}</InlineMessage> : !items ? <MiniLoading /> : items.length === 0 ? <EmptyState icon={Bell} title="暂无通知" description="任务进展和账户变化会显示在这里。" compact /> : (
+    <><button className="user-notification-scrim" aria-label="关闭通知遮罩" onClick={onClose} type="button" /><section id="user-notifications" className="user-notifications" aria-label="通知" role="dialog">
+      <header><strong>通知</strong><div><button disabled={busy || !bootstrap.notifications.unread_count} onClick={() => { setBusy(true); void readAll().catch((reason) => setError(messageOf(reason))).finally(() => setBusy(false)); }} type="button">全部已读</button><button ref={closeRef} aria-label="关闭通知" onClick={onClose} type="button"><X size={18} /></button></div></header>
+      {error && <InlineMessage tone="error">{error}</InlineMessage>}
+      {!items ? !error && <MiniLoading /> : items.length === 0 ? <EmptyState icon={Bell} title="暂无通知" description="任务进展和账户变化会显示在这里。" compact /> : (
         <div className="user-notification-list">
           {items.map((item) => (
-            <button className={item.read_at ? "" : "unread"} key={item.id} onClick={() => void read(item)} type="button">
+            <button disabled={busy} className={item.read_at ? "" : "unread"} key={item.id} onClick={() => { setBusy(true); void read(item).catch((reason) => setError(messageOf(reason))).finally(() => setBusy(false)); }} type="button">
               <span><strong>{item.title}</strong><small>{item.body}</small></span><time>{dateTime(item.created_at)}</time>
             </button>
           ))}
         </div>
       )}
-    </section>
+    </section></>
   );
 }
 
@@ -611,8 +659,8 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
         <button className="user-primary" onClick={() => navigate("/app/studio")} type="button"><Plus size={17} />新建图片任务</button>
       </PageHeader>
       <section className="user-creative-hero">
-        <div><span><Sparkles size={15} />为每一个好想法，留出空间</span><h2>从灵感，到作品。<br /><em>只差一次创作。</em></h2><p>生成、精修、抠图、放大。把繁琐交给工具，把专注留给创意。</p><button className="user-primary" onClick={() => navigate("/app/studio?tool=ai.generate")} type="button">开始新的创作<ArrowRight size={17} /></button></div>
-        <img className="user-collection-art" src="/studio-collection.svg" alt="同一植物印花在画稿、T 恤和杯子上的应用" width="720" height="520" />
+        <div><span><i className="user-creative-dot" />A SPACE FOR YOUR NEXT IDEA</span><h2>创意，自有光芒。<br /><em>把想象精雕成作品。</em></h2><p>从图像生成到印花提取，让每一处细节，<br className="wide-only" />都成为你的设计语言。</p><button className="user-primary" onClick={() => navigate("/app/studio?tool=ai.generate")} type="button">开始新的创作<ArrowRight size={17} /></button><small className="user-hero-footnote">你的灵感，你的创作空间。</small></div>
+        <img className="user-collection-art" src="/studio-prism.svg" alt="悬浮玻璃画框中的银色光谱雕塑" width="1200" height="900" />
       </section>
       <section className="user-quick-tools" aria-label="快捷创作">
         {(["ai.generate", "ai.extract_print", "ai.redraw"] as const).map((code) => { const item = OPERATION_META[code]; const Icon = item.icon; return <button key={code} onClick={() => navigate(`/app/studio?tool=${code}`)} type="button"><span><Icon size={22} /></span><div><strong>{item.label}</strong><small>{item.description}</small></div><ArrowRight size={17} /></button>; })}
@@ -663,6 +711,7 @@ function StudioPage({
   onBootstrap: (value: BootstrapData) => void;
 }) {
   const initialSource = new URLSearchParams(window.location.search).get("source");
+  const initialJob = new URLSearchParams(window.location.search).get("job");
   const [operations, setOperations] = useState<Operation[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [operationCode, setOperationCode] = useState(
@@ -688,7 +737,9 @@ function StudioPage({
   const [expanded, setExpanded] = useState(false);
   const bootstrapRef = useRef(bootstrap);
   bootstrapRef.current = bootstrap;
-  const [busy, setBusy] = useState<"loading" | "upload" | "quote" | "submit" | "mask" | null>("loading");
+  const [busyState, setBusy] = useState<"loading" | "upload" | "quote" | "submit" | "mask" | null>("loading");
+  const [restoringJob, setRestoringJob] = useState(Boolean(initialJob));
+  const busy = restoringJob ? "loading" : busyState;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [activeJob, setActiveJob] = useState<ImageJob | null>(null);
@@ -708,7 +759,7 @@ function StudioPage({
       const [operationPayload, assetPayload] = await Promise.all([api.operations(), api.assets()]);
       setOperations(operationPayload.items.filter((item) => item.enabled));
       setAssets((current) => [...assetPayload.items, ...current.filter((item) => !assetPayload.items.some((loaded) => loaded.id === item.id))]);
-      setOperationCode((current) =>
+      if (!initialJob) setOperationCode((current) =>
         operationPayload.items.some((item) => item.enabled && item.code === current)
           ? current
           : operationPayload.items.find((item) => item.enabled)?.code || "ai.generate",
@@ -762,11 +813,15 @@ function StudioPage({
 
   useEffect(() => {
     let cancelled = false;
+    let jobId = initialJob;
     try {
-      const jobId = sessionStorage.getItem(`studio-job:${bootstrap.user.id}`);
-      if (jobId) void api.job(jobId).then(async ({ job }) => {
+      // Explicit task/source links always take precedence over a background task.
+      if (!jobId && !initialSource) jobId = sessionStorage.getItem(`studio-job:${bootstrap.user.id}`);
+    } catch { /* Storage may be disabled by the browser. */ }
+    if (jobId) {
+      setRestoringJob(true);
+      void api.job(jobId).then(async ({ job }) => {
         if (cancelled) return;
-        setActiveJob(job);
         setOperationCode(job.operation_code);
         setSourceId(job.source_asset_id || "");
         setForm((current) => ({
@@ -774,15 +829,24 @@ function StudioPage({
           prompt: String(job.parameters.prompt || job.parameters.instruction || ""),
           size: String(job.parameters.size || current.size),
           quality: String(job.parameters.quality || current.quality),
+          colorMode: String(job.parameters.mode || current.colorMode),
+          color: String(job.parameters.color || current.color),
+          maxColors: Number(job.parameters.max_colors || current.maxColors),
         }));
         if (job.source_asset_id) {
-          const { asset } = await api.asset(job.source_asset_id);
-          if (!cancelled) setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
+          try {
+            const { asset } = await api.asset(job.source_asset_id);
+            if (!cancelled) setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
+          } catch (reason) {
+            if (!cancelled) setError(`原图暂不可用，可能已过期或被删除。${messageOf(reason)}`);
+          }
         }
-      }).catch(() => undefined);
-    } catch { /* Storage may be disabled by the browser. */ }
+        if (!cancelled) setActiveJob(job);
+      }).catch((reason) => { if (!cancelled) setError(messageOf(reason, "无法载入任务")); })
+        .finally(() => { if (!cancelled) setRestoringJob(false); });
+    }
     return () => { cancelled = true; };
-  }, [bootstrap.user.id]);
+  }, [bootstrap.user.id, initialJob, initialSource]);
 
   useEffect(() => {
     let cancelled = false;
@@ -819,7 +883,9 @@ function StudioPage({
         } else {
           setNotice("");
           refreshBalance();
-          try { sessionStorage.removeItem(`studio-job:${bootstrap.user.id}`); } catch { /* Optional storage. */ }
+          try {
+            if (sessionStorage.getItem(`studio-job:${bootstrap.user.id}`) === jobId) sessionStorage.removeItem(`studio-job:${bootstrap.user.id}`);
+          } catch { /* Optional storage. */ }
         }
       } catch (reason) {
         if (cancelled) return;
@@ -1256,8 +1322,8 @@ function JobDrawer({ job, onCancel, onClose }: { job: ImageJob; onCancel: (job: 
         <dl className="user-detail-list"><div><dt>处理进度</dt><dd>{job.progress}%</dd></div><div><dt>消耗积分</dt><dd>{job.charged_points}</dd></div><div><dt>尝试次数</dt><dd>{job.attempt_count}</dd></div><div><dt>退款状态</dt><dd>{job.refund_status === "refunded" ? "已退款" : "无退款"}</dd></div><div><dt>提交时间</dt><dd>{dateTime(job.created_at)}</dd></div><div><dt>完成时间</dt><dd>{dateTime(job.completed_at)}</dd></div></dl>
         {failed && <div className="user-failure-box"><AlertCircle size={18} /><span><strong>{job.error_message || (job.status === "cancelled" ? "任务已由你取消" : "图片处理未能完成")}</strong><small>{job.refund_status === "refunded" ? "本次消耗积分已自动退回。" : "系统正在核对退款状态。"}</small></span></div>}
         {job.status === "queued" && <button className="user-danger-button" onClick={() => void onCancel(job)} type="button"><XCircle size={17} />取消任务并退款</button>}
-        {failed && job.source_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?source=${job.source_asset_id}`)} type="button"><RefreshCw size={17} />使用原素材重试</button>}
-        {job.status === "succeeded" && job.output_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?source=${job.output_asset_id}`)} type="button"><ImagePlus size={17} />在编辑器中打开结果</button>}
+        {failed && job.source_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><RefreshCw size={17} />使用原素材重试</button>}
+        {job.status === "succeeded" && job.output_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><ImagePlus size={17} />{job.source_asset_id ? "在编辑器中查看前后对比" : "在编辑器中打开结果"}</button>}
       </aside>
     </div>
   );

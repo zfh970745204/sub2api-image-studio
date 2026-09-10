@@ -2,6 +2,7 @@ export class ApiError extends Error {
   status: number;
   code: string;
   requestId?: string;
+  retryAfter?: number;
 
   constructor(status: number, code: string, message: string, requestId?: string) {
     super(message);
@@ -25,12 +26,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       detail?: string | { message?: string };
     };
     const detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message;
-    throw new ApiError(
+    const error = new ApiError(
       response.status,
       payload.code || `HTTP_${response.status}`,
       payload.message || detail || `请求失败（${response.status}）`,
       payload.request_id,
     );
+    const retryAfter = Number(response.headers.get("Retry-After"));
+    if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfter = retryAfter;
+    throw error;
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -204,9 +208,12 @@ export interface SessionInfo {
 
 export const api = {
   authOptions: () => request<{ registration_enabled: boolean }>("/api/v1/auth/options"),
-  register: (email: string, display_name: string, password: string) =>
+  sendRegistrationCode: (email: string) => request<{ status: string; retry_after_seconds: number; expires_in_seconds: number }>("/api/v1/auth/register/email-code", {
+    method: "POST", body: JSON.stringify({ email }),
+  }),
+  register: (email: string, display_name: string, password: string, verification_code: string) =>
     request<{ user: UserSummary }>("/api/v1/auth/register", {
-      method: "POST", body: JSON.stringify({ email, display_name, password }),
+      method: "POST", body: JSON.stringify({ email, display_name, password, verification_code }),
     }),
   login: (identifier: string, password: string) =>
     request<{ user: UserSummary }>("/api/v1/auth/login", {

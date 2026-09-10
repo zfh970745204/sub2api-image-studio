@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" fill="none">
+  <title>Prism — 光与创作的交汇</title>
+  <defs>
+    <radialGradient id="halo"><stop stop-color="#6368b5" stop-opacity=".38"/><stop offset="1" stop-color="#11121c" stop-opacity="0"/></radialGradient>
+    <linearGradient id="glass" x1="280" y1="130" x2="940" y2="760" gradientUnits="userSpaceOnUse"><stop stop-color="#ebedff" stop-opacity=".13"/><stop offset=".46" stop-color="#8b95c9" stop-opacity=".025"/><stop offset="1" stop-color="#c6c6ef" stop-opacity=".14"/></linearGradient>
+    <linearGradient id="edge" x1="220" y1="90" x2="1000" y2="760" gradientUnits="userSpaceOnUse"><stop stop-color="#e8e8ff" stop-opacity=".6"/><stop offset=".42" stop-color="#d9dfff" stop-opacity=".04"/><stop offset="1" stop-color="#b8c4ed" stop-opacity=".4"/></linearGradient>
+    <linearGradient id="silver" x1="360" y1="180" x2="824" y2="650" gradientUnits="userSpaceOnUse"><stop stop-color="#a2bbd7"/><stop offset=".13" stop-color="#eef1f6"/><stop offset=".24" stop-color="#fafbff"/><stop offset=".32" stop-color="#767fae"/><stop offset=".43" stop-color="#20253c"/><stop offset=".55" stop-color="#9397c4"/><stop offset=".67" stop-color="#eee8f6"/><stop offset=".78" stop-color="#b7d3e2"/><stop offset=".89" stop-color="#505b80"/><stop offset="1" stop-color="#151a2d"/></linearGradient>
+    <linearGradient id="reverse" x1="790" y1="350" x2="426" y2="570" gradientUnits="userSpaceOnUse"><stop stop-color="#555f91"/><stop offset=".18" stop-color="#a1b2cb"/><stop offset=".43" stop-color="#e4dfef"/><stop offset=".59" stop-color="#837a9e"/><stop offset=".78" stop-color="#343950"/><stop offset="1" stop-color="#151a2b"/></linearGradient>
+    <linearGradient id="glint" x1="370" y1="225" x2="820" y2="650" gradientUnits="userSpaceOnUse"><stop stop-color="#fff"/><stop offset=".35" stop-color="#c2d6ff" stop-opacity=".15"/><stop offset=".68" stop-color="#f1eeff"/><stop offset="1" stop-color="#d1dbff" stop-opacity=".1"/></linearGradient>
+    <linearGradient id="floor" x1="600" y1="681" x2="600" y2="830" gradientUnits="userSpaceOnUse"><stop stop-color="#bcbfe8" stop-opacity=".12"/><stop offset="1" stop-color="#bcbfe8" stop-opacity="0"/></linearGradient>
+    <filter id="shadow" x="-.5" y="-.5" width="2" height="2"><feGaussianBlur stdDeviation="24"/></filter>
+    <filter id="glow" x="-.5" y="-.5" width="2" height="2"><feGaussianBlur stdDeviation="7"/></filter>
+  </defs>
+  <ellipse cx="651" cy="425" rx="580" ry="435" fill="url(#halo)"/>
+  <ellipse cx="629" cy="730" rx="226" ry="29" fill="#080a14" filter="url(#shadow)"/>
+  <path d="M250 741H995M250 783H995" stroke="#a6afd7" stroke-opacity=".08"/>
+  <rect x="310" y="148" width="588" height="580" rx="26" transform="rotate(12 604 438)" fill="url(#glass)" stroke="url(#edge)"/>
+  <rect x="280" y="151" width="600" height="570" rx="24" transform="rotate(-9 580 436)" fill="url(#glass)" stroke="url(#edge)"/>
+  <rect x="302" y="175" width="578" height="540" rx="20" fill="#1c2030" fill-opacity=".35" stroke="url(#edge)"/>
+  <path d="M336 234V209H361M821 209H846V234M336 656V681H361M821 681H846V656" stroke="#c2c9e8" stroke-opacity=".45"/>
+  <circle cx="813" cy="237" r="3" fill="#c8cee6"/>
+  <path d="M829 237H845" stroke="#d5daf6" stroke-opacity=".4"/>
+  <path d="M760 272C651 177 439 203 388 340C330 495 480 675 639 656C811 635 851 491 773 401C718 337 633 353 567 427C515 485 446 466 450 408C456 323 641 282 760 272Z" fill="#080b17" fill-opacity=".55" transform="translate(8 21)" filter="url(#shadow)"/>
+  <path d="M760 272C651 177 439 203 388 340C330 495 480 675 639 656C811 635 851 491 773 401C718 337 633 353 567 427C515 485 446 466 450 408C456 323 641 282 760 272Z" fill="url(#silver)"/>
+  <path d="M760 272C703 223 609 203 527 231C448 259 410 329 432 394C452 453 518 465 567 427C633 353 718 337 773 401C733 374 674 395 634 458C562 571 420 520 390 424C416 587 562 683 689 643C803 607 834 502 773 401C782 382 785 324 760 272Z" fill="url(#reverse)"/>
+  <path d="M432 394C414 329 448 259 527 231C609 203 703 223 760 272" stroke="url(#glint)" stroke-width="1.5"/>
+  <path d="M388 340C330 495 480 675 639 656C741 644 807 580 801 506" stroke="url(#glint)" stroke-width="1.5"/>
+  <path d="M450 408C456 323 641 282 760 272" stroke="#e6eaff" stroke-opacity=".7"/>
+  <path d="M567 427C633 353 718 337 773 401" stroke="#dfebff" stroke-opacity=".8"/>
+  <path d="M400 321C451 212 601 205 691 241" stroke="#ebecff" stroke-opacity=".45" stroke-width="4" filter="url(#glow)"/>
+  <path d="M673 629C741 607 781 564 787 508" stroke="#adcdfb" stroke-opacity=".55" stroke-width="5" filter="url(#glow)"/>
+  <ellipse cx="626" cy="748" rx="148" ry="16" fill="url(#floor)" filter="url(#glow)"/>
+  <path d="M944 287V327M924 307H964M213 579V607M199 593H227" stroke="#a7b3dd" stroke-opacity=".45"/>
+  <circle cx="952" cy="626" r="4" stroke="#bfc8e8" stroke-opacity=".5"/>
+  <circle cx="224" cy="332" r="2" fill="#a5b5df" fill-opacity=".6"/>
+</svg>

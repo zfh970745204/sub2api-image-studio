@@ -26,11 +26,13 @@ describe("Studio task workflow", () => {
   let assetRead: ReturnType<typeof vi.fn<() => Promise<Response>>>;
   let events: ReturnType<typeof vi.fn<() => Promise<Response>>>;
   let sourceAssets: typeof result[];
+  let sourceRead: ReturnType<typeof vi.fn<() => Promise<Response>>>;
   let restoredJob: Record<string, unknown>;
 
   beforeEach(() => {
     sessionStorage.clear();
     sourceAssets = [];
+    sourceRead = vi.fn(async () => response({ asset: { ...result, id: "source-1", kind: "original" } }));
     restoredJob = { ...job, parameters: {} };
     window.history.replaceState({}, "", "/app/studio");
     submit = vi.fn().mockImplementation(() => Promise.resolve(response({ job, created: true, dispatched: true })));
@@ -42,11 +44,13 @@ describe("Studio task workflow", () => {
       if (url.startsWith("/api/v1/assets?")) return response({ items: sourceAssets });
       if (url === "/api/v1/jobs/quote") return response({ quote });
       if (url === "/api/v1/jobs") return submit(url, init);
+      if (url.startsWith("/api/v1/jobs?")) return response({ items: [restoredJob] });
       if (url === "/api/v1/jobs/job-1/events") return events();
       if (url === "/api/v1/jobs/job-1") return response({ job: restoredJob });
+      if (url === "/api/v1/assets/source-1") return sourceRead();
       if (url === "/api/v1/assets/result-1") return assetRead();
       if (url.endsWith("/lineage")) return response({ items: [result] });
-      if (url.endsWith("/download-url")) return response({ url: "/test-image.png", expires_at: "2099-01-01T00:00:00Z" });
+      if (url.endsWith("/download-url")) return response({ url: url.includes("source-1") ? "/original-image.png" : "/test-image.png", expires_at: "2099-01-01T00:00:00Z" });
       if (url === "/api/v1/points/balance") return response({ account: { ...bootstrap.points, balance: 180 } });
       if (url === "/api/v1/me/preferences") return response({ preferences: bootstrap.preferences });
       throw new Error(`Unexpected test request: ${url}`);
@@ -134,5 +138,51 @@ describe("Studio task workflow", () => {
     expect(await screen.findByRole("img", { name: "来源素材预览" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "正在处理图片" })).toBeDisabled();
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("opens an explicit completed task with distinct before/after images and preserves another running task", async () => {
+    restoredJob = { ...job, operation_code: "ai.redraw", source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: { instruction: "保留字体和色彩", quality: "medium" } };
+    events.mockImplementation(async () => response({ job: restoredJob, next_poll_after_ms: null }));
+    sessionStorage.setItem("studio-job:user-1", "unrelated-job");
+    window.history.replaceState({}, "", "/app/studio?job=job-1");
+    render(<UserApp />);
+    expect(await screen.findByRole("img", { name: "来源素材预览" })).toHaveAttribute("src", "/original-image.png");
+    expect(await screen.findByRole("img", { name: "图片任务结果" })).toHaveAttribute("src", "/test-image.png");
+    expect(screen.getByRole("textbox", { name: /补充要求/ })).toHaveValue("保留字体和色彩");
+    expect(sessionStorage.getItem("studio-job:user-1")).toBe("unrelated-job");
+    expect(fetchMock.mock.calls.some(([url]) => url.includes("unrelated-job"))).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("still displays a completed result when its original is unavailable", async () => {
+    restoredJob = { ...job, operation_code: "ai.redraw", source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: {} };
+    sourceRead.mockResolvedValue(response({ message: "素材已删除" }, 404));
+    events.mockImplementation(async () => response({ job: restoredJob, next_poll_after_ms: null }));
+    window.history.replaceState({}, "", "/app/studio?job=job-1");
+    render(<UserApp />);
+    expect(await screen.findByRole("img", { name: "图片任务结果" })).toHaveAttribute("src", "/test-image.png");
+    expect(screen.getByRole("alert")).toHaveTextContent("原图暂不可用");
+    expect(screen.queryByRole("img", { name: "来源素材预览" })).not.toBeInTheDocument();
+  });
+
+  it("does not replace a direct source link with a stored background job", async () => {
+    sessionStorage.setItem("studio-job:user-1", "job-1");
+    window.history.replaceState({}, "", "/app/studio?source=source-1&tool=ai.redraw");
+    render(<UserApp />);
+    expect(await screen.findByRole("img", { name: "来源素材预览" })).toHaveAttribute("src", "/original-image.png");
+    expect(fetchMock.mock.calls.some(([url]) => url === "/api/v1/jobs/job-1")).toBe(false);
+    expect(screen.queryByRole("img", { name: "图片任务结果" })).not.toBeInTheDocument();
+  });
+
+  it("navigates from task details to the original task comparison", async () => {
+    restoredJob = { ...job, operation_code: "ai.redraw", source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: {} };
+    events.mockImplementation(async () => response({ job: restoredJob, next_poll_after_ms: null }));
+    window.history.replaceState({}, "", "/app/jobs");
+    render(<UserApp />);
+    fireEvent.click(await screen.findByRole("button", { name: "查看任务详情" }));
+    fireEvent.click(screen.getByRole("button", { name: "在编辑器中查看前后对比" }));
+    expect(window.location.search).toBe("?job=job-1");
+    expect(await screen.findByRole("img", { name: "来源素材预览" })).toHaveAttribute("src", "/original-image.png");
+    expect(await screen.findByRole("img", { name: "图片任务结果" })).toHaveAttribute("src", "/test-image.png");
   });
 });

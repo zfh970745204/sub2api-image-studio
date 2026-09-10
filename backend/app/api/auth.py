@@ -27,10 +27,17 @@ from app.services.auth import AuthService, as_utc, utcnow
 from app.services.configuration import GeneralValues, runtime_config_value
 from app.services.memberships import EntitlementService
 from app.services.points import PointService
+from app.services.registration import (
+    CODE_TTL_SECONDS,
+    RESEND_SECONDS,
+    RegistrationMailer,
+    RegistrationService,
+)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 membership_service = EntitlementService()
 point_service = PointService()
+registration_service = RegistrationService()
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$")
 
@@ -47,17 +54,28 @@ class LoginRequest(BaseModel):
         return value
 
 
-class RegisterRequest(BaseModel):
+class RegistrationEmailRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str = Field(max_length=320)
-    display_name: str = Field(min_length=1, max_length=120)
-    password: SecretStr
 
     @field_validator("email")
     @classmethod
     def normalize_email(cls, value: str) -> str:
         return validate_email(value)
+
+
+class RegisterRequest(RegistrationEmailRequest):
+    display_name: str = Field(min_length=1, max_length=120)
+    password: SecretStr
+    verification_code: SecretStr
+
+    @field_validator("verification_code")
+    @classmethod
+    def check_code(cls, value: SecretStr) -> SecretStr:
+        if not re.fullmatch(r"[0-9]{6}", value.get_secret_value()):
+            raise ValueError("请输入邮件中的 6 位数字验证码")
+        return value
 
     @field_validator("display_name")
     @classmethod
@@ -222,6 +240,32 @@ async def auth_options(request: Request) -> dict[str, bool]:
     return {"registration_enabled": bool(values["registration_enabled"])}
 
 
+@router.post("/register/email-code", status_code=status.HTTP_202_ACCEPTED)
+async def send_registration_code(
+    payload: RegistrationEmailRequest, request: Request
+) -> dict[str, Any]:
+    security_service = getattr(request.app.state, "security_service", None)
+    if security_service is not None:
+        await security_service.enforce_login(request, policy_code="register_email")
+    runtime = request.app.state.runtime_services
+    async with runtime.database.session_factory() as session:
+        values = await registration_config(session)
+        if not values["registration_enabled"]:
+            raise ApiError(403, "REGISTRATION_CLOSED", "管理员已关闭注册，请联系管理员开通账号")
+        await registration_service.send_code(
+            session,
+            service=auth_service(request),
+            runtime=runtime,
+            email=payload.email,
+            mailer=getattr(request.app.state, "registration_mailer", None) or RegistrationMailer(),
+        )
+    return {
+        "status": "sent",
+        "retry_after_seconds": RESEND_SECONDS,
+        "expires_in_seconds": CODE_TTL_SECONDS,
+    }
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(
     payload: RegisterRequest, request: Request, response: Response
@@ -236,12 +280,21 @@ async def register(
         values = await registration_config(session)
         if not values["registration_enabled"]:
             raise ApiError(403, "REGISTRATION_CLOSED", "管理员已关闭注册，请联系管理员开通账号")
+        if await session.scalar(select(User.id).where(User.email == payload.email)):
+            raise ApiError(409, "USER_ALREADY_EXISTS", "邮箱已被使用，请登录或联系管理员")
+        await registration_service.verify(
+            session,
+            service=service,
+            email=payload.email,
+            code=payload.verification_code.get_secret_value(),
+        )
         user = User(
             id=uuid7(),
             email=payload.email,
             display_name=payload.display_name,
             password_hash=service.hash_password(payload.password.get_secret_value()),
             status="active",
+            email_verified_at=utcnow(),
             session_version=1,
             permission_version=1,
         )

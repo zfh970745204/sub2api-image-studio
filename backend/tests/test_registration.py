@@ -10,21 +10,51 @@ from test_configuration import login as config_login
 from test_configuration import seed_user as config_user
 
 from app.api import auth
-from app.repositories.models import PointAccount, PointTransaction, User, UserMembership
+from app.repositories.models import (
+    PointAccount,
+    PointTransaction,
+    RegistrationChallenge,
+    User,
+    UserMembership,
+)
 from app.services.memberships import sync_builtin_membership_plans
 from app.services.security import SecurityService
 
 auth_context = auth_fixture
 config_context = config_fixture
-PAYLOAD = {"email": "new@example.test", "display_name": "设计师", "password": "new secure password"}
+PAYLOAD = {
+    "email": "new@example.test",
+    "display_name": "设计师",
+    "password": "new secure password",
+    "verification_code": "000000",
+}
+
+
+class Inbox:
+    def __init__(self):
+        self.codes = {}
+
+    async def send(self, runtime, *, email, code):
+        self.codes[email] = code
+
+
+async def verified_payload(context, client):
+    inbox = Inbox()
+    context.app.state.registration_mailer = inbox
+    sent = await client.post("/api/v1/auth/register/email-code", json={"email": PAYLOAD["email"]})
+    assert sent.status_code == 202, sent.text
+    code = inbox.codes[PAYLOAD["email"]]
+    assert code not in sent.text
+    return {**PAYLOAD, "verification_code": code}
 
 
 @pytest.mark.asyncio
 async def test_registration_creates_only_a_normal_user_and_grants_once(auth_context):
     async with client_for(auth_context) as client:
         assert (await client.get("/api/v1/auth/options")).json() == {"registration_enabled": True}
+        payload = await verified_payload(auth_context, client)
         created = await client.post(
-            "/api/v1/auth/register", json={**PAYLOAD, "email": " NEW@Example.Test "}
+            "/api/v1/auth/register", json={**payload, "email": " NEW@Example.Test "}
         )
         assert created.status_code == 201, created.text
         assert "HttpOnly" in created.headers["set-cookie"]
@@ -34,7 +64,7 @@ async def test_registration_creates_only_a_normal_user_and_grants_once(auth_cont
         assert me["user"]["email"] == PAYLOAD["email"]
         assert "studio.use" in me["permissions"]
         assert "config.manage" not in me["permissions"]
-        assert me["user"]["email_verified_at"] is None
+        assert me["user"]["email_verified_at"] is not None
         assert PAYLOAD["password"] not in created.text
         duplicate = await client.post("/api/v1/auth/register", json=PAYLOAD)
         assert duplicate.status_code == 409
@@ -82,7 +112,8 @@ async def test_admin_registration_switch_and_defaults_are_enforced_at_submit(con
             json={"base_version": 1, "values": {"registration_enabled": True}},
         )
         assert opened.status_code == 200, opened.text
-        created = await visitor.post("/api/v1/auth/register", json=PAYLOAD)
+        payload = await verified_payload(config_context, visitor)
+        created = await visitor.post("/api/v1/auth/register", json=payload)
         assert created.status_code == 201, created.text
         user_id = uuid.UUID(created.json()["user"]["id"])
         closed_again = await manager.put(
@@ -90,6 +121,10 @@ async def test_admin_registration_switch_and_defaults_are_enforced_at_submit(con
             json={"base_version": 2, "values": {"registration_enabled": False}},
         )
         assert closed_again.status_code == 200
+        closed_send = await visitor.post(
+            "/api/v1/auth/register/email-code", json={"email": "another@example.test"}
+        )
+        assert closed_send.status_code == 403
         assert (
             await visitor.post(
                 "/api/v1/auth/register", json={**PAYLOAD, "email": "another@example.test"}
@@ -130,19 +165,23 @@ async def test_registration_rejects_privilege_injection_and_rolls_back_grant_fai
             raise RuntimeError("simulated grant failure")
 
         monkeypatch.setattr(auth.point_service, "ensure_onboarding_grant", fail)
+        payload = await verified_payload(auth_context, client)
         with pytest.raises(RuntimeError, match="simulated grant failure"):
-            await client.post("/api/v1/auth/register", json=PAYLOAD)
+            await client.post("/api/v1/auth/register", json=payload)
     async with auth_context.database.session_factory() as session:
         assert await session.scalar(select(func.count(User.id))) == 0
         assert await session.scalar(select(func.count(UserMembership.id))) == 0
+        challenge = await session.get(RegistrationChallenge, PAYLOAD["email"])
+        assert challenge.consumed_at is None
 
 
 @pytest.mark.asyncio
 async def test_registration_is_rate_limited_by_ip(auth_context):
     auth_context.app.state.security_service = SecurityService(auth_context.app.state.settings)
     async with client_for(auth_context) as client:
+        payload = await verified_payload(auth_context, client)
         for _ in range(5):
-            response = await client.post("/api/v1/auth/register", json=PAYLOAD)
+            response = await client.post("/api/v1/auth/register", json=payload)
             assert response.status_code in {201, 409}
         blocked = await client.post(
             "/api/v1/auth/register", json={**PAYLOAD, "email": "blocked@example.test"}

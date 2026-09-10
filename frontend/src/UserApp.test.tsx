@@ -87,6 +87,7 @@ describe("UserApp authentication", () => {
     render(<UserApp />);
     fireEvent.change(await screen.findByLabelText("显示名称"), { target: { value: "设计师" } });
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "new@example.test" } });
+    fireEvent.change(screen.getByLabelText("邮箱验证码"), { target: { value: "123456" } });
     fireEvent.change(screen.getByLabelText(/^密码/), { target: { value: "new secure password" } });
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "another secure password" } });
     fireEvent.click(screen.getByRole("button", { name: "注册并进入工作台" }));
@@ -96,6 +97,35 @@ describe("UserApp authentication", () => {
     fireEvent.click(screen.getByRole("button", { name: "注册并进入工作台" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "注册并进入工作台" })).not.toBeInTheDocument());
     const body = fetchMock.mock.calls.find(([url]) => url.endsWith("/register"))?.[1]?.body;
-    expect(JSON.parse(String(body))).toEqual({ email: "new@example.test", display_name: "设计师", password: "new secure password" });
+    expect(JSON.parse(String(body))).toEqual({ email: "new@example.test", display_name: "设计师", password: "new secure password", verification_code: "123456" });
+  });
+
+  it("sends to the normalized email, prevents repeated sends, and clears code on email change", async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(url.endsWith("/options") ? { registration_enabled: true } : { status: "sent", retry_after_seconds: 60, expires_in_seconds: 600 })));
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState({}, "", "/register");
+    render(<UserApp />);
+    fireEvent.change(await screen.findByLabelText("邮箱"), { target: { value: "NEW@Example.test" } });
+    fireEvent.click(screen.getByRole("button", { name: "获取验证码" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("new@example.test");
+    expect(screen.getByRole("button", { name: /秒后重发/ })).toBeDisabled();
+    expect(JSON.parse(String(fetchMock.mock.calls.find(([url]) => url.endsWith("/email-code"))?.[1]?.body))).toEqual({ email: "new@example.test" });
+    fireEvent.change(screen.getByLabelText("邮箱验证码"), { target: { value: "123456" } });
+    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "another@example.test" } });
+    expect(screen.getByLabelText("邮箱验证码")).toHaveValue("");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("shows email delivery errors and respects the server resend cooldown", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("/options")
+      ? new Response(JSON.stringify({ registration_enabled: true }))
+      : new Response(JSON.stringify({ code: "CODE_SEND_TOO_SOON", message: "请稍后再试" }), { status: 429, headers: { "Retry-After": "90" } })));
+    window.history.replaceState({}, "", "/register");
+    render(<UserApp />);
+    fireEvent.change(await screen.findByLabelText("邮箱"), { target: { value: "new@example.test" } });
+    fireEvent.click(screen.getByRole("button", { name: "获取验证码" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请稍后再试");
+    expect(screen.getByRole("button", { name: /秒后重发/ })).toBeDisabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });
