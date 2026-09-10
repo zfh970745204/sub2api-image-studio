@@ -4,9 +4,11 @@
 
 | 页面 | 文件 | 尺寸与用途 |
 | --- | --- | --- |
-| 登录 | `frontend/public/brand/login-art.webp` | 纵向银色丝带与玻璃材质，预留文案空间 |
-| 注册 | `frontend/public/brand/register-art.webp` | 纵向珍珠、纸艺和玻璃材质，用于独立注册体验 |
-| 首页 | `frontend/public/brand/home-art.webp` | 横向玻璃雕塑，左侧留出首页创作入口文案 |
+| 登录 | `frontend/public/brand/login-studio-v3.webp` | 真实黑色印花 T 恤产品摄影，右侧主体、左侧留白 |
+| 注册 | `frontend/public/brand/register-studio-v3.webp` | 真实陶瓷杯与帆布袋产品摄影，体现 POD 商品场景 |
+| 首页 | `frontend/public/brand/home-studio-v3.webp` | 真实服装、杯子与印刷品的电商产品摄影 |
+
+页面效果示例使用真实输入与接口处理结果：`shirt-source-v3.webp` -> `shirt-print-v3.webp`，以及 CC BY-SA 4.0 的真实杯子照片 `mug-source-v3.webp` -> `mug-commerce-v3.webp`。杯子原图来源：Runologe, Wikimedia Commons, https://commons.wikimedia.org/wiki/File:A_mug_with_the_runes_of_a_page_of_the_Codex_Runicus_-_Tasse_mit_Runen_einer_Seite_des_Codex_Runicus.jpg 。
 
 生成使用 imagegen 的 CLI 备用流程与 `gpt-image-2`，高质量 WebP 输出。精确的三条提示和输出文件名保存在 `docs/brand-artwork-prompts.jsonl`；生成原件在本地 `output/imagegen/brand/`，该目录被忽略，不会进入仓库。项目中的发布版本已经经过压缩，约 180–190 KB/张。
 

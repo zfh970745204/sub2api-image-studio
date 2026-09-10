@@ -139,6 +139,7 @@ export interface ImageJob {
   operation_code: string;
   source_asset_id: string | null;
   output_asset_id: string | null;
+  output_asset_ids?: string[];
   status: string;
   refund_status: string;
   parameters: Record<string, unknown>;
@@ -225,7 +226,17 @@ export function estimatedPoints(operation: Operation | undefined, parameters: Re
     if (rule.type === "choice" && typeof rule.points === "object") total += rule.points[String(value)] || 0;
     else if (rule.type === "per_unit" && typeof rule.points === "number") total += Math.ceil(Math.max(0, Number(value) - (rule.included || 0)) / (rule.unit || 1)) * rule.points;
   }
-  return total;
+  return total * (operation.code === "ai.ecommerce" ? Number(parameters.image_count || 1) : 1);
+}
+
+export const jobOutputIds = (job: ImageJob) => job.output_asset_ids?.length ? job.output_asset_ids : job.output_asset_id ? [job.output_asset_id] : [];
+
+export async function downloadJob(jobId: string) {
+  const response = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/download`);
+  if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.message || "整组下载失败，请重试"); }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a"); link.href = url; link.download = `studio-${jobId}.zip`; link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 export const api = {

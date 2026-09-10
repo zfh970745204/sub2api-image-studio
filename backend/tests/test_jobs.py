@@ -160,7 +160,7 @@ async def quote(
 ) -> dict:
     response = await client.post(
         "/api/v1/jobs/quote",
-        json={"operation_code": operation_code, "parameters": parameters or {}},
+        json={"operation_code": operation_code, "parameters": parameters if parameters is not None else ({"prompt": "test image"} if operation_code == "ai.generate" else {})},
     )
     assert response.status_code == 201, response.text
     return response.json()["quote"]
@@ -176,8 +176,69 @@ async def create_job(
     return await client.post(
         "/api/v1/jobs",
         headers={"Idempotency-Key": key},
-        json={"quote_id": job_quote["id"], "parameters": parameters or {}},
+        json={"quote_id": job_quote["id"], "parameters": parameters if parameters is not None else ({"prompt": "test image"} if job_quote["operation_code"] == "ai.generate" else {})},
     )
+
+
+@pytest.mark.asyncio
+async def test_ecommerce_quote_multiplies_per_image_price_and_rejects_foreign_reference(
+    job_context: JobContext,
+) -> None:
+    owner = await seed_user(job_context, email="ecommerce-owner@example.com")
+    stranger = await seed_user(job_context, email="ecommerce-stranger@example.com")
+    foreign_asset_id = uuid7()
+    async with job_context.database.session_factory() as session:
+        session.add(
+            Asset(
+                id=foreign_asset_id,
+                owner_id=stranger.id,
+                root_asset_id=foreign_asset_id,
+                kind="original",
+                operation_code="upload",
+                bucket="test",
+                object_key=f"test/{foreign_asset_id}.png",
+                mime_type="image/png",
+                extension="png",
+                size_bytes=1,
+                sha256="0" * 64,
+                status="ready",
+            )
+        )
+        await session.commit()
+
+    async with client_for(job_context, user_agent="ecommerce-owner-device") as client:
+        await login(client, owner.email)
+        priced = await client.post(
+            "/api/v1/jobs/quote",
+            json={
+                "operation_code": "ai.ecommerce",
+                "parameters": {
+                    "prompt": "white studio product listing",
+                    "platform": "amazon",
+                    "image_count": 3,
+                    "quality": "high",
+                },
+            },
+        )
+        assert priced.status_code == 201, priced.text
+        quote_payload = priced.json()["quote"]
+        assert quote_payload["base_points"] == 60
+        assert quote_payload["surcharge_points"] == 30
+        assert quote_payload["final_points"] == 90
+
+        rejected = await client.post(
+            "/api/v1/jobs/quote",
+            json={
+                "operation_code": "ai.ecommerce",
+                "parameters": {
+                    "prompt": "use this product reference",
+                    "reference_asset_ids": [str(foreign_asset_id)],
+                    "image_count": 2,
+                },
+            },
+        )
+        assert rejected.status_code == 404
+        assert rejected.json()["code"] == "REFERENCE_ASSET_NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -320,7 +381,7 @@ async def test_versioned_price_quote_snapshot_and_idempotent_charge(
         operations = await member_client.get("/api/v1/operations")
         assert operations.status_code == 200
         by_code = {item["code"]: item for item in operations.json()["items"]}
-        assert len(by_code) == 11
+        assert len(by_code) == 12
         assert by_code["ai.generate"]["member_base_points"] == 20
 
         old_quote = await quote(member_client, "ai.generate")

@@ -3,7 +3,7 @@ import { useSiteBranding } from "./SiteBranding";
 import { Pagination, useCursorPage } from "./Pagination";
 import { ImageThumbnail } from "./ImageThumbnail";
 import { JobProgress } from "./JobProgress";
-import { estimatedPoints } from "./user-api";
+import { estimatedPoints, jobOutputIds, downloadJob } from "./user-api";
 import {
   AlertCircle,
   ArrowRight,
@@ -142,6 +142,7 @@ const OPERATION_META: Record<
   { label: string; description: string; icon: ComponentType<{ size?: number }>; source: boolean }
 > = {
   "ai.generate": { label: "AI 生成", description: "根据描述创建新图案", icon: Sparkles, source: false },
+  "ai.ecommerce": { label: "电商主图", description: "一组产品，多张主图。参考产品外观，统一设计与色彩。", icon: Images, source: false },
   "ai.redraw": { label: "高清重绘", description: "保留内容并提升清晰度", icon: WandSparkles, source: true },
   "ai.extract_print": { label: "印花提取", description: "从产品照片还原印花，保留设计与色彩，输出透明 PNG", icon: FileImage, source: true },
   "cutout.smart": { label: "智能抠图", description: "输出透明 PNG", icon: Scissors, source: true },
@@ -705,6 +706,8 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
 }
 
 interface StudioFormState {
+  platform: string;
+  imageCount: number;
   prompt: string;
   size: string;
   quality: string;
@@ -728,8 +731,13 @@ function StudioPage({
     new URLSearchParams(window.location.search).get("tool") || bootstrap.preferences.studio_layout.last_tool || (initialSource ? "ai.redraw" : "ai.generate"),
   );
   const [sourceId, setSourceId] = useState(initialSource || "");
+  const [referenceIds, setReferenceIds] = useState<string[]>(initialSource ? [initialSource] : []);
+  const [batchResults, setBatchResults] = useState<Asset[]>([]);
+  const [downloadingBatch, setDownloadingBatch] = useState(false);
   const [maskId, setMaskId] = useState("");
   const [form, setForm] = useState<StudioFormState>({
+    platform: "amazon",
+    imageCount: 4,
     prompt: "",
     size: "1024x1024",
     quality: "high",
@@ -798,9 +806,11 @@ function StudioPage({
 
   const selectedOperation = operations.find((item) => item.code === operationCode);
   const meta = OPERATION_META[operationCode] || OPERATION_META["ai.redraw"];
+  const isGeneration = operationCode === "ai.generate" || operationCode === "ai.ecommerce";
+  const compareSource = meta.source || (isGeneration && Boolean(sourceId));
   const source = assets.find((item) => item.id === sourceId) || null;
-  const displayAsset = resultAsset || (meta.source ? source : null);
-  const sourceUrl = useSignedAssetUrl(meta.source ? source?.id || null : null, previewRevision, (reason) => setError(messageOf(reason, "原图预览地址获取失败")));
+  const displayAsset = resultAsset || (compareSource ? source : null);
+  const sourceUrl = useSignedAssetUrl(compareSource ? source?.id || null : null, previewRevision, (reason) => setError(messageOf(reason, "原图预览地址获取失败")));
   const resultUrl = useSignedAssetUrl(resultAsset?.id || null, previewRevision, (reason) => setError(messageOf(reason, "结果预览地址获取失败")));
   const needsMask = operationCode === "ai.repair" || operationCode === "ai.text_fix";
   const canCreate = bootstrap.permissions.includes("studio.use") && bootstrap.permissions.includes("tasks.create");
@@ -833,9 +843,17 @@ function StudioPage({
       void api.job(jobId).then(async ({ job }) => {
         if (cancelled) return;
         setOperationCode(job.operation_code);
-        setSourceId(job.source_asset_id || "");
+        const refs = Array.isArray(job.parameters.reference_asset_ids) ? job.parameters.reference_asset_ids.map(String) : job.source_asset_id ? [job.source_asset_id] : [];
+        setReferenceIds(refs);
+        setSourceId(job.source_asset_id || refs[0] || "");
+        for (const id of refs.filter((id) => id !== job.source_asset_id)) {
+          try { const { asset } = await api.asset(id); if (!cancelled) setAssets((current) => [asset, ...current.filter((item) => item.id !== id)]); }
+          catch { if (!cancelled) setError("部分参考图已过期或被删除，重新提交前请替换。"); }
+        }
         setForm((current) => ({
           ...current,
+          platform: String(job.parameters.platform || "amazon"),
+          imageCount: Number(job.parameters.image_count || 4),
           prompt: String(job.parameters.prompt || job.parameters.instruction || ""),
           size: String(job.parameters.size || current.size),
           quality: String(job.parameters.quality || current.quality),
@@ -880,10 +898,12 @@ function StudioPage({
         // Results are published after the completion transaction. Retry retrieval
         // until available instead of stopping forever at the first 404/503.
         if (job.status === "succeeded" && job.output_asset_id) {
-          const { asset } = await api.asset(job.output_asset_id);
+          const results = await Promise.all(jobOutputIds(job).map(async (id) => (await api.asset(id)).asset));
+          const asset = results[0];
           if (cancelled) return;
           setResultAsset(asset);
-          setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
+          setBatchResults(results);
+          setAssets((current) => [...results, ...current.filter((item) => !results.some((output) => output.id === item.id))]);
           setNotice("");
         }
         setActiveJob(job);
@@ -908,8 +928,8 @@ function StudioPage({
   }, [activeJob?.id]);
 
   function parameters(): Record<string, unknown> {
-    if (operationCode === "ai.generate") {
-      return { prompt: form.prompt.trim(), size: form.size, quality: form.quality, output_format: "png" };
+    if (isGeneration) {
+      return { prompt: form.prompt.trim(), size: form.size, quality: form.quality, output_format: "png", reference_asset_ids: referenceIds, ...(operationCode === "ai.ecommerce" ? { platform: form.platform, image_count: form.imageCount } : {}) };
     }
     if (operationCode === "ai.redraw" || operationCode === "ai.variant" || operationCode === "ai.extract_print") {
       return { instruction: form.prompt.trim(), size: "auto", quality: form.quality };
@@ -947,6 +967,26 @@ function StudioPage({
     }
   }
 
+  function changeReferences(ids: string[]) {
+    setReferenceIds(ids); setSourceId(ids[0] || ""); setQuote(null); setResultAsset(null); setBatchResults([]);
+  }
+
+  async function uploadReferences(files: File[]) {
+    if (busy || jobRunning || !files.length) return;
+    if (referenceIds.length + files.length > 6) { setError("最多添加 6 张参考图，可先移除不需要的图片。"); return; }
+    if (files.some((file) => file.size > bootstrap.membership.entitlements.max_upload_mb * 1024 * 1024)) { setError("参考图超过会员上传大小限制。"); return; }
+    setBusy("upload"); setError("");
+    const uploaded: Asset[] = [];
+    try {
+      for (const file of files) uploaded.push((await api.uploadAsset(file)).asset);
+    } catch (reason) { setError(messageOf(reason, "部分图片上传失败，已上传的图片仍保留。")); }
+    finally {
+      setAssets((current) => [...uploaded, ...current]);
+      if (uploaded.length) changeReferences([...referenceIds, ...uploaded.map((asset) => asset.id)]);
+      setBusy(null); if (uploadRef.current) uploadRef.current.value = "";
+    }
+  }
+
   async function uploadMask(file?: File) {
     if (!file) return;
     setBusy("mask");
@@ -967,7 +1007,7 @@ function StudioPage({
   async function prepareQuote() {
     setError("");
     setNotice("");
-    if (operationCode === "ai.generate" && !form.prompt.trim()) {
+    if (isGeneration && !form.prompt.trim() && !referenceIds.length) {
       setError("请输入希望生成的图片内容。");
       return;
     }
@@ -990,7 +1030,7 @@ function StudioPage({
         setMaskId(asset.id);
       }
       const snapshot = { ...parameters(), ...(needsMask ? { mask_asset_id: selectedMaskId } : {}) };
-      const payload = await api.quote(operationCode, meta.source ? sourceId : null, snapshot);
+      const payload = await api.quote(operationCode, meta.source || isGeneration ? sourceId || null : null, snapshot);
       quoteParameters.current = snapshot;
       setQuote(payload.quote);
     } catch (reason) {
@@ -1010,6 +1050,7 @@ function StudioPage({
       setActiveJob(payload.job);
       setQuote(null);
       setResultAsset(null);
+      setBatchResults([]);
       try { sessionStorage.setItem(`studio-job:${bootstrap.user.id}`, payload.job.id); } catch { /* Optional storage. */ }
       setNotice(payload.dispatched ? "任务已进入处理队列，可继续浏览其他页面。" : "任务已保存，调度器将尽快处理。 ");
       refreshBalance();
@@ -1028,6 +1069,8 @@ function StudioPage({
     setError("");
     setNotice("");
     setResultAsset(null);
+    setBatchResults([]);
+    if (code === "ai.generate" || code === "ai.ecommerce") { setReferenceIds([]); setSourceId(""); }
     if (!jobRunning) setActiveJob(null);
     api.updatePreferences({ studio_layout: { last_tool: code } }).catch(() => undefined);
   }
@@ -1059,21 +1102,22 @@ function StudioPage({
             return <button aria-label={item.label} aria-pressed={operationCode === operation.code} disabled={Boolean(busy) || jobRunning} className={operationCode === operation.code ? "active" : ""} key={operation.code} onClick={() => selectOperation(operation.code)} title={`${item.label} · 预计 ${operation.member_base_points ?? operation.current_price?.base_points ?? 0} 积分起`} type="button"><Icon size={19} /><span>{item.label}</span></button>;
           })}
         </nav>
-        <section className="user-canvas-column" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void upload(event.dataTransfer.files[0]); }}>
+        <section className="user-canvas-column" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (isGeneration) void uploadReferences(Array.from(event.dataTransfer.files)); else void upload(event.dataTransfer.files[0]); }}>
           <header className="user-canvas-head">
-            <span><FileImage size={17} /><strong>{meta.source ? "原图与结果" : "创作预览"}</strong></span>
+            <span><FileImage size={17} /><strong>{compareSource ? "原图与结果" : "创作预览"}</strong></span>
             <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{(source || resultAsset) && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
             {resultAsset && <div className="user-canvas-actions"><button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button></div>}
           </header>
-          <ComparisonPreview key={`${sourceId}:${resultAsset?.id}:${operationCode}`} compare={meta.source} source={source ? { asset: source, url: sourceUrl } : null} result={resultAsset ? { asset: resultAsset, url: resultUrl } : null}
+          <ComparisonPreview key={`${sourceId}:${resultAsset?.id}:${operationCode}`} compare={compareSource} source={source ? { asset: source, url: sourceUrl } : null} result={resultAsset ? { asset: resultAsset, url: resultUrl } : null}
             backgroundClass={`preview-${previewMode}`} backgroundStyle={previewStyle}
             onError={() => setError("图片预览加载失败，可尝试重新载入预览或下载图片。")}
             sourceOverlay={needsMask && !resultAsset && source?.width && source?.height ? <MaskCanvas key={`${sourceId}:${maskRevision}`} ref={brushRef} disabled={Boolean(busy) || jobRunning} width={source.width} height={source.height} onChange={() => { setMaskId(""); setQuote(null); }} /> : undefined}
-            empty={busy === "loading" ? <MiniLoading /> : operationCode === "ai.generate" ? (
+            empty={busy === "loading" ? <MiniLoading /> : isGeneration ? (
               <div className="user-canvas-empty generation"><span><Sparkles size={32} /></span><small>YOUR NEXT CREATION</small><strong>把想象，变成看得见的作品</strong><p>在右侧写下你的想法，<br />选择尺寸与质量，即可开始创作。</p><div className="user-prompt-examples">{["极简植物线稿，米白背景，适合装饰画", "复古山脉与落日，丝网印刷风格"].map((prompt) => <button key={prompt} onClick={() => setForm({ ...form, prompt })} type="button">{prompt}<ArrowRight size={14} /></button>)}</div></div>
             ) : (
               <button className="user-canvas-empty" disabled={Boolean(busy) || jobRunning} onClick={() => uploadRef.current?.click()} type="button"><span><ImagePlus size={32} /></span><strong>放入图片，开始创作</strong><p>拖拽图片到这里，或点击上传</p><small>PNG / JPEG / WebP · 最大 {bootstrap.membership.entitlements.max_upload_mb} MB</small></button>
             )} />
+          {batchResults.length > 1 && <section className="studio-result-gallery" aria-label="本次任务全部结果"><header><strong>本次结果 <small>{batchResults.length} 张</small></strong><button type="button" className="user-secondary" disabled={downloadingBatch} onClick={async () => { if (!activeJob) return; setDownloadingBatch(true); try { await downloadJob(activeJob.id); } catch (reason) { setError(messageOf(reason)); } finally { setDownloadingBatch(false); } }}><Download size={14} />{downloadingBatch ? "打包中…" : "下载整组 ZIP"}</button></header><div>{batchResults.map((asset, index) => <button type="button" key={asset.id} aria-label={`查看第 ${index + 1} 张结果`} aria-pressed={resultAsset?.id === asset.id} onClick={() => setResultAsset(asset)}><ImageThumbnail id={asset.id} /><span>{String(index + 1).padStart(2, "0")}</span></button>)}</div></section>}
             {activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status) && (
               <JobProgress job={activeJob} />
             )}
@@ -1094,14 +1138,16 @@ function StudioPage({
         <aside className="user-studio-controls">
           <header><span>创作设置</span><h2>{meta.label}</h2><p>{meta.description}</p></header>
           <fieldset className="user-studio-fields" disabled={Boolean(busy) || jobRunning}>
+          {isGeneration && <section className="studio-references"><header><span>参考图片 <small>可选 · {referenceIds.length}/6</small></span><button type="button" onClick={() => uploadRef.current?.click()} disabled={referenceIds.length >= 6}><Plus size={14} />添加</button></header><div>{referenceIds.map((id, index) => <div key={id}><button type="button" aria-label={`查看参考图 ${index + 1}`} aria-pressed={sourceId === id} onClick={() => { setSourceId(id); setReferenceIds([id, ...referenceIds.filter((value) => value !== id)]); setQuote(null); }}><ImageThumbnail id={id} /><small>{index === 0 ? "主参考" : `参考 ${index + 1}`}</small></button><button className="studio-reference-remove" type="button" aria-label={`移除参考图 ${index + 1}`} onClick={() => changeReferences(referenceIds.filter((value) => value !== id))}><X size={12} /></button></div>)}{!referenceIds.length && <button className="studio-reference-empty" type="button" onClick={() => uploadRef.current?.click()}><ImagePlus size={20} /><span>上传产品或灵感图<small>支持多选，也可拖入画布</small></span></button>}</div><select aria-label="从素材库添加参考图" value="" disabled={referenceIds.length >= 6} onChange={(event) => { if (event.target.value) changeReferences([...referenceIds, event.target.value]); }}><option value="">从素材库添加</option>{selectableAssets.filter((asset) => !referenceIds.includes(asset.id)).map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></section>}
+          {operationCode === "ai.ecommerce" && <div className="studio-commerce-fields"><label className="user-field"><span>电商平台</span><select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}><option value="amazon">Amazon</option><option value="etsy">Etsy</option><option value="shopify">Shopify</option><option value="taobao">淘宝 / 天猫</option><option value="jd">京东</option><option value="douyin">抖音电商</option></select></label><label className="user-field"><span>生成张数</span><select value={form.imageCount} onChange={(event) => setForm({ ...form, imageCount: Number(event.target.value) })}>{Array.from({ length: 8 }, (_, i) => <option value={i + 1} key={i}>{i + 1} 张</option>)}</select></label></div>}
           {meta.source && (
             <div className="studio-source-picker"><label className="user-field"><span>来源素材</span><select onChange={(event) => { setSourceId(event.target.value); setResultAsset(null); }} value={sourceId}><option value="">从素材库选择</option>{selectableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></label><button className="user-secondary" aria-label={source ? "替换 / 上传图片" : "上传图片"} title={source ? "替换 / 上传图片" : "上传图片"} disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}</button></div>
           )}
-          <input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void upload(event.target.files?.[0])} ref={uploadRef} type="file" />
+          <input accept="image/png,image/jpeg,image/webp" hidden multiple={isGeneration} onChange={(event) => { if (isGeneration) void uploadReferences(Array.from(event.target.files || [])); else void upload(event.target.files?.[0]); }} ref={uploadRef} type="file" />
           {(operationCode.startsWith("ai.") || operationCode === "ai.generate") && (
             <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={3} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
           )}
-          {operationCode === "ai.generate" && <label className="user-field"><span>画布尺寸</span><select onChange={(event) => setForm({ ...form, size: event.target.value })} value={form.size}><option value="1024x1024">方形 · 1024 × 1024</option><option value="1024x1536">竖版 · 1024 × 1536</option><option value="1536x1024">横版 · 1536 × 1024</option><option value="auto">自动</option></select></label>}
+          {isGeneration && <label className="user-field"><span>画布尺寸</span><select onChange={(event) => setForm({ ...form, size: event.target.value })} value={form.size}><option value="1024x1024">方形 · 1024 × 1024</option><option value="1024x1536">竖版 · 1024 × 1536</option><option value="1536x1024">横版 · 1536 × 1024</option><option value="auto">自动</option></select></label>}
           {(operationCode.startsWith("ai.")) && <Segmented label="生成质量" value={form.quality} options={[["medium", `标准 · ${estimatedPoints(selectedOperation, { quality: "medium" }) ?? "--"} 积分`], ["high", `精细 · ${estimatedPoints(selectedOperation, { quality: "high" }) ?? "--"} 积分`]]} onChange={(value) => setForm({ ...form, quality: value })} />}
           {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
@@ -1113,7 +1159,7 @@ function StudioPage({
           <div className="user-studio-submit">
           <div className="user-quote-summary"><span>预计积分</span><strong>{estimatedPoints(selectedOperation, parameters()) ?? "--"}<small>积分</small></strong></div>
           <button className="user-primary user-submit-operation" disabled={Boolean(busy) || jobRunning || !selectedOperation || maintenance || providerUnavailable} onClick={() => void prepareQuote()} type="button">{busy === "quote" || jobRunning ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}{jobRunning ? "正在处理图片" : busy === "quote" ? "正在计算报价" : "开始创作"}<ArrowRight size={16} /></button>
-          <small className="user-submit-note">确认报价后扣费 · 失败自动退还积分</small>
+          <small className="user-submit-note">{operationCode === "ai.ecommerce" && `共 ${form.imageCount} 张 · `}确认报价后扣费 · 失败自动退还积分</small>
           {(maintenance || providerUnavailable) && <small className="user-maintenance-note">{maintenance ? "服务维护期间暂不接受新任务" : "AI 图片服务尚未配置"}</small>}
           {!selectedOperation && !busy && <small className="user-maintenance-note">没有可用工具，请检查后台的功能定价配置。</small>}
           </div>
@@ -1299,19 +1345,21 @@ function JobDrawer({ job: initialJob, onCancel, onClose }: { job: ImageJob; onCa
     return () => { active = false; window.clearInterval(timer); };
   }, [initialJob.id, job.status]);
   const failed = ["failed", "timed_out", "cancelled"].includes(job.status);
+  const outputIds = jobOutputIds(job);
   return (
     <div className="user-drawer-layer">
       <button aria-label="关闭任务详情" className="user-drawer-scrim" onClick={onClose} type="button" />
       <aside className="user-drawer" aria-label="任务详情">
         <header><span><small>任务详情</small><strong>{operationName(job.operation_code)}</strong></span><button aria-label="关闭" onClick={onClose} title="关闭" type="button"><X size={19} /></button></header>
         <div className="user-job-detail-head"><StatusBadge status={job.status} /><code>{job.id}</code></div>
-        <div className="user-job-preview-pair">{job.source_asset_id && <figure><ImageThumbnail id={job.source_asset_id} alt="处理前" /><figcaption>处理前</figcaption></figure>}{job.output_asset_id && <figure><ImageThumbnail id={job.output_asset_id} alt="处理后" /><figcaption>处理后</figcaption></figure>}</div>
+        <div className="user-job-preview-pair">{job.source_asset_id && <figure><ImageThumbnail id={job.source_asset_id} alt="处理前" /><figcaption>处理前</figcaption></figure>}{outputIds[0] && <figure><ImageThumbnail id={outputIds[0]} alt="处理后" /><figcaption>{outputIds.length > 1 ? `处理后 · ${outputIds.length} 张` : "处理后"}</figcaption></figure>}</div>
+        {outputIds.length > 1 && <div className="user-job-output-list" aria-label="全部处理结果">{outputIds.map((id, index) => <ImageThumbnail id={id} alt={`结果 ${index + 1}`} key={id} />)}</div>}
         <JobProgress job={job} />
         <dl className="user-detail-list"><div><dt>处理进度</dt><dd>{job.progress}%</dd></div><div><dt>消耗积分</dt><dd>{job.charged_points}</dd></div><div><dt>尝试次数</dt><dd>{job.attempt_count}</dd></div><div><dt>退款状态</dt><dd>{job.refund_status === "refunded" ? "已退款" : "无退款"}</dd></div><div><dt>提交时间</dt><dd>{dateTime(job.created_at)}</dd></div><div><dt>完成时间</dt><dd>{dateTime(job.completed_at)}</dd></div></dl>
         {failed && <div className="user-failure-box"><AlertCircle size={18} /><span><strong>{job.error_message || (job.status === "cancelled" ? "任务已由你取消" : "图片处理未能完成")}</strong><small>{job.refund_status === "refunded" ? "本次消耗积分已自动退回。" : "系统正在核对退款状态。"}</small></span></div>}
         {job.status === "queued" && <button className="user-danger-button" onClick={() => void onCancel(job)} type="button"><XCircle size={17} />取消任务并退款</button>}
         {failed && job.source_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><RefreshCw size={17} />使用原素材重试</button>}
-        {job.status === "succeeded" && job.output_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><ImagePlus size={17} />{job.source_asset_id ? "在编辑器中查看前后对比" : "在编辑器中打开结果"}</button>}
+        {job.status === "succeeded" && outputIds[0] && <><button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><ImagePlus size={17} />{job.source_asset_id ? "在编辑器中查看前后对比" : "在编辑器中打开结果"}</button>{outputIds.length > 1 && <button className="user-secondary" onClick={() => void downloadJob(job.id)} type="button"><Download size={16} />下载整组结果</button>}</>}
       </aside>
     </div>
   );
@@ -1675,7 +1723,8 @@ function Brand({ inverse = false }: { inverse?: boolean }) {
 
 function BrandArtwork({ place, className }: { place: "login" | "register" | "home"; className: string }) {
   const branding = useSiteBranding();
-  return <img className={className} src={branding[`${place}_image_url`]} alt={place === "register" ? "珍珠与香槟色纸艺雕塑" : "银色与虹彩玻璃光影雕塑"} fetchPriority="high" decoding="async" />;
+  const labels = { login: "印花服装产品摄影", register: "杯子与帆布袋产品摄影", home: "服装与杯子产品摄影" };
+  return <img className={className} src={branding[`${place}_image_url`]} alt={labels[place]} fetchPriority="high" decoding="async" />;
 }
 
 function Avatar({ name }: { name: string }) {

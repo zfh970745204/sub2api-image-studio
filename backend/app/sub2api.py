@@ -61,6 +61,7 @@ class Sub2APIClient:
         quality: str,
         output_format: str,
         mask_png: bytes | None = None,
+        reference_images: list[bytes] | None = None,
     ) -> UpstreamImage:
         data = {
             "model": self.settings.sub2api_image_model,
@@ -70,9 +71,11 @@ class Sub2APIClient:
             "output_format": output_format,
             "n": "1",
         }
-        files: dict[str, tuple[str, bytes, str]] = {"image": ("image.png", image_png, "image/png")}
+        images = [image_png, *(reference_images or [])]
+        field = "image[]" if len(images) > 1 else "image"
+        files = [(field, ("image.png" if len(images) == 1 else f"image-{index}.png", value, "image/png")) for index, value in enumerate(images)]
         if mask_png is not None:
-            files["mask"] = ("mask.png", mask_png, "image/png")
+            files.append(("mask", ("mask.png", mask_png, "image/png")))
         response = await self._request("POST", "/images/edits", data=data, files=files)
         return self._decode_image(response, output_format)
 

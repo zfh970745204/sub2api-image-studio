@@ -10,6 +10,7 @@ import "./experience.css";
 import "./design.css";
 import "./editor.css";
 import "./landing.css";
+import "./polish.css";
 
 const RootApp = window.location.pathname.startsWith("/admin") ? AdminApp : UserApp;
 

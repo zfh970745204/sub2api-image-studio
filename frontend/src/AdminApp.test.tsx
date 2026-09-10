@@ -46,6 +46,18 @@ describe("administrator configuration workflows", () => {
     expect(screen.getByText("任务成功率")).toBeInTheDocument();
   });
 
+  it("shows general and branding configuration as effective without an enabled flag", async () => {
+    vi.stubGlobal("fetch", mockAdmin([
+      { code: "general", name: "通用设置", active_version: 4, active: { values: { registration_enabled: true } } },
+      { code: "branding", name: "网站配置", active_version: 2, active: { values: { site_name: "Sub2Image" } } },
+    ]));
+    render(<AdminApp />);
+    expect(await screen.findByRole("cell", { name: "通用设置" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "网站配置" })).toBeInTheDocument();
+    expect(screen.getAllByText("已生效")).toHaveLength(2);
+    expect(screen.queryByText("已停用")).not.toBeInTheDocument();
+  });
+
   it("opens real config fields for a super admin and saves without an approval request", async () => {
     const fetchMock = mockAdmin([configRow]);
     vi.stubGlobal("fetch", fetchMock);

@@ -16,6 +16,7 @@ class OperationSeed:
 
 OPERATION_SEEDS = (
     OperationSeed("ai.generate", "AI 生成图案", "sub2api", "image-jobs", 20, 240, 3),
+    OperationSeed("ai.ecommerce", "电商主图", "sub2api", "image-jobs", 20, 2400, 2),
     OperationSeed("ai.redraw", "高清重绘", "sub2api", "image-jobs", 18, 240, 3),
     OperationSeed("ai.extract_print", "印花提取", "sub2api", "image-jobs", 18, 240, 3),
     OperationSeed("ai.repair", "局部修复", "sub2api", "image-jobs", 15, 240, 3),
@@ -29,6 +30,7 @@ OPERATION_SEEDS = (
 )
 
 OPERATION_CODES = frozenset(seed.code for seed in OPERATION_SEEDS)
+ECOMMERCE_PLATFORMS = frozenset({"amazon", "etsy", "shopify", "taobao", "jd", "douyin"})
 OPERATION_ENGINE_TYPES = frozenset({"sub2api", "local_model", "local_code"})
 JOB_STATUSES = frozenset(
     {"queued", "running", "retry_wait", "succeeded", "failed", "cancelled", "timed_out"}

@@ -47,8 +47,8 @@ describe("public landing session and feature navigation", () => {
     expect(screen.queryByRole("link", { name: "登录" })).not.toBeInTheDocument();
     const extraction = screen.getByRole("tab", { name: "印花提取" });
     fireEvent.keyDown(extraction, { key: "ArrowRight" });
-    expect(screen.getByRole("tab", { name: "去除背景" })).toHaveFocus();
-    expect(within(screen.getByRole("tabpanel")).getByRole("img", { name: "透明素材" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "试试去除背景" })).toHaveAttribute("href", "/app/studio?tool=cutout.smart");
+    expect(screen.getByRole("tab", { name: "电商主图" })).toHaveFocus();
+    expect(within(screen.getByRole("tabpanel")).getByRole("img", { name: "电商主图" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "试试电商主图" })).toHaveAttribute("href", "/app/studio?tool=ai.ecommerce");
   });
 });

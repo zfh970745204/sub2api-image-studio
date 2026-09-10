@@ -163,6 +163,7 @@ class JobService:
         if operation is None or not operation.enabled:
             raise ApiError(404, "OPERATION_NOT_AVAILABLE", "图片操作不存在或已停用")
         await self._validate_source_asset(session, source_asset_id=source_asset_id, user_id=user_id)
+        count = await self._validate_generation(session, operation_code, canonical, source_asset_id, user_id)
         price = await self.current_price(session, operation.id, now=current_time)
         entitlement = await self.entitlements.current_snapshot(
             session, user_id, now=current_time, request_id=request_id
@@ -176,7 +177,7 @@ class JobService:
                 raise ApiError(422, "INVALID_OPERATION_PARAMETERS", "生成质量无效")
         surcharge = self.calculate_surcharge(price.parameter_rules, effective)
         discounted_base = math.ceil(price.base_points * entitlement.discount_bps / 10_000)
-        final_points = max(0, discounted_base + surcharge)
+        final_points = max(0, discounted_base + surcharge) * count
         quote = JobQuote(
             id=uuid7(),
             user_id=user_id,
@@ -192,9 +193,9 @@ class JobService:
                 "retention_days": entitlement.retention_days,
             },
             pricing_version=price.version,
-            base_points=price.base_points,
-            discount_points=price.base_points - discounted_base,
-            surcharge_points=surcharge,
+            base_points=price.base_points * count,
+            discount_points=(price.base_points - discounted_base) * count,
+            surcharge_points=surcharge * count,
             final_points=final_points,
             expires_at=current_time + timedelta(seconds=ttl_seconds),
             created_at=current_time,
@@ -265,6 +266,7 @@ class JobService:
         await self._validate_source_asset(
             session, source_asset_id=quote.source_asset_id, user_id=user_id
         )
+        await self._validate_generation(session, quote.operation_code, canonical, quote.source_asset_id, user_id)
         operation = (
             await session.scalars(
                 select(OperationCatalog).where(OperationCatalog.code == quote.operation_code)
@@ -500,6 +502,7 @@ class JobService:
         provider_request_id: str | None,
         metrics: dict[str, Any] | None,
         request_id: str,
+        output_asset_ids: list[uuid.UUID] | None = None,
         now: datetime | None = None,
     ) -> bool:
         current_time = now or utcnow()
@@ -513,6 +516,7 @@ class JobService:
             .values(
                 status="succeeded",
                 output_asset_id=output_asset_id,
+                output_asset_ids=[str(item) for item in (output_asset_ids or ([output_asset_id] if output_asset_id else []))],
                 progress=100,
                 completed_at=current_time,
                 worker_id=None,
@@ -1199,6 +1203,41 @@ class JobService:
                 target_url="/app/jobs",
             )
         )
+
+    @staticmethod
+    async def _validate_generation(session, code, parameters, source_id, user_id) -> int:
+        from app.domain.jobs import ECOMMERCE_PLATFORMS
+
+        if code not in {"ai.generate", "ai.ecommerce"}:
+            if parameters.get("reference_asset_ids") or parameters.get("image_count", 1) != 1:
+                raise ApiError(422, "INVALID_OPERATION_PARAMETERS", "当前工具不支持多图参数")
+            return 1
+        refs = parameters.get("reference_asset_ids", [])
+        if not isinstance(refs, list) or len(refs) > 6:
+            raise ApiError(422, "INVALID_REFERENCE_ASSETS", "最多上传 6 张参考图")
+        try:
+            ids = [uuid.UUID(str(value)) for value in refs]
+        except (ValueError, TypeError) as exc:
+            raise ApiError(422, "INVALID_REFERENCE_ASSETS", "参考图标识无效") from exc
+        if len(set(ids)) != len(ids) or (source_id and ids and ids[0] != source_id):
+            raise ApiError(422, "INVALID_REFERENCE_ASSETS", "首张参考图必须与来源素材一致，且不能重复")
+        for asset_id in set(ids + ([source_id] if source_id else [])):
+            asset = await session.get(Asset, asset_id)
+            if asset is None or asset.owner_id != user_id or asset.status != "ready":
+                raise ApiError(404, "REFERENCE_ASSET_NOT_FOUND", "参考图不存在或已不可用")
+            if asset.mime_type not in {"image/png", "image/jpeg", "image/webp"} or asset.kind in {"mask", "thumbnail"}:
+                raise ApiError(422, "INVALID_REFERENCE_ASSETS", "参考图必须是 PNG、JPEG 或 WebP 图片")
+        prompt = parameters.get("prompt", "")
+        if code == "ai.ecommerce" and (not isinstance(prompt, str) or (not prompt.strip() and not ids and not source_id)):
+            raise ApiError(422, "INVALID_OPERATION_PARAMETERS", "请描述图片内容或提供参考图")
+        if parameters.get("size", "1024x1024") not in {"auto", "1024x1024", "1024x1536", "1536x1024"}:
+            raise ApiError(422, "INVALID_OPERATION_PARAMETERS", "画布尺寸无效")
+        count = parameters.get("image_count", 1)
+        if type(count) is not int or not 1 <= count <= (8 if code == "ai.ecommerce" else 1):
+            raise ApiError(422, "INVALID_IMAGE_COUNT", "电商主图每次支持 1–8 张，AI 生成每次 1 张")
+        if code == "ai.ecommerce" and parameters.get("platform", "amazon") not in ECOMMERCE_PLATFORMS:
+            raise ApiError(422, "INVALID_PLATFORM", "请选择支持的电商平台")
+        return count
 
     @staticmethod
     async def _validate_source_asset(

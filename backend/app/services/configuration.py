@@ -219,9 +219,9 @@ class GeneralValues(StrictValues):
 class BrandingValues(StrictValues):
     site_name: str = Field(default="Sub2Image", min_length=1, max_length=60)
     logo_url: str = "/brand-symbol.svg"
-    login_image_url: str = "/brand/login-art.webp"
-    register_image_url: str = "/brand/register-art.webp"
-    home_image_url: str = "/brand/home-art.webp"
+    login_image_url: str = "/brand/login-studio-v3.webp"
+    register_image_url: str = "/brand/register-studio-v3.webp"
+    home_image_url: str = "/brand/home-studio-v3.webp"
 
     @field_validator("site_name")
     @classmethod

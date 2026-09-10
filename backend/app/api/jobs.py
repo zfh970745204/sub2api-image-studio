@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 import uuid
+import zipfile
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from arq.connections import RedisSettings, create_pool
 from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, asc, desc, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +19,7 @@ from app.api.dependencies import Principal, get_current_principal, require_permi
 from app.api.errors import ApiError
 from app.domain.ids import uuid7
 from app.domain.jobs import JOB_STATUSES
+from app.object_storage import ObjectStorageError
 from app.repositories.models import (
     ImageJob,
     JobAttempt,
@@ -23,6 +27,7 @@ from app.repositories.models import (
     OperationCatalog,
     OperationPrice,
 )
+from app.services.assets import AssetService
 from app.services.configuration import runtime_config_value
 from app.services.jobs import JobService
 
@@ -204,6 +209,7 @@ def job_payload(job: ImageJob) -> dict[str, Any]:
         "operation_code": job.operation_code,
         "source_asset_id": job.source_asset_id,
         "output_asset_id": job.output_asset_id,
+        "output_asset_ids": job.output_asset_ids or ([str(job.output_asset_id)] if job.output_asset_id else []),
         "quote_id": job.quote_id,
         "status": job.status,
         "refund_status": job.refund_status,
@@ -469,6 +475,39 @@ async def get_my_job(
     async with database.session_factory() as session:
         job = await get_job_or_404(session, job_id, user_id=principal.user_id)
     return {"job": job_payload(job)}
+
+
+@router.get("/api/v1/jobs/{job_id}/download", dependencies=[Depends(require_permission("assets.read_own"))])
+async def download_job_results(job_id: uuid.UUID, request: Request, principal: JobOwnerReader):
+    runtime = request.app.state.runtime_services
+    async with runtime.database.session_factory() as session:
+        job = await get_job_or_404(session, job_id, user_id=principal.user_id)
+        ids = job.output_asset_ids or ([str(job.output_asset_id)] if job.output_asset_id else [])
+        if job.status != "succeeded" or not ids:
+            raise ApiError(409, "JOB_RESULTS_NOT_READY", "任务结果尚未就绪")
+        assets = [await AssetService().require_usable(session, uuid.UUID(value), owner_id=principal.user_id) for value in ids]
+    # The response generator owns and closes this file after the client has read it.
+    archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)  # noqa: SIM115
+    try:
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for index, asset in enumerate(assets, 1):
+                data = await runtime.object_storage.get_object(asset.object_key)
+                bundle.writestr(f"image-{index:02d}.{asset.extension}", data)
+        archive.seek(0)
+    except BaseException as exc:
+        archive.close()
+        if isinstance(exc, ObjectStorageError):
+            raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "结果下载暂不可用，请稍后重试") from exc
+        raise
+
+    def chunks():
+        try:
+            while chunk := archive.read(256 * 1024):
+                yield chunk
+        finally:
+            archive.close()
+
+    return StreamingResponse(chunks(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="studio-{job_id}.zip"', "Cache-Control": "private, no-store"})
 
 
 @router.post("/api/v1/jobs/{job_id}/cancel")

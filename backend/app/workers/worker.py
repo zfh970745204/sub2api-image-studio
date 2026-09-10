@@ -35,6 +35,11 @@ class JobExecutionResult:
     output_asset_id: uuid.UUID | None = None
     provider_request_id: str | None = None
     metrics: dict[str, Any] | None = None
+    output_asset_ids: tuple[uuid.UUID, ...] = ()
+
+    @property
+    def all_outputs(self) -> tuple[uuid.UUID, ...]:
+        return self.output_asset_ids or ((self.output_asset_id,) if self.output_asset_id else ())
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -186,19 +191,22 @@ async def execute_image_job(ctx: dict[str, Any], job_id: str) -> dict[str, Any]:
                     session,
                     claim=claim,
                     output_asset_id=result.output_asset_id,
+                    output_asset_ids=list(result.all_outputs),
                     provider_request_id=result.provider_request_id,
                     metrics=result.metrics,
                     request_id=request_id,
                 )
                 await session.commit()
         except Exception:
-            await _discard_output(executor, result.output_asset_id)
+            for asset_id in result.all_outputs:
+                await _discard_output(executor, asset_id)
             raise
         if not accepted:
-            await _discard_output(executor, result.output_asset_id)
-        elif result.output_asset_id is not None:
+            for asset_id in result.all_outputs:
+                await _discard_output(executor, asset_id)
+        for asset_id in result.all_outputs if accepted else ():
             try:
-                await _publish_output(executor, result.output_asset_id, claim.job_id)
+                await _publish_output(executor, asset_id, claim.job_id)
             except Exception:
                 logger.exception(
                     "image job output publish failed; scheduler will reconcile",
@@ -256,6 +264,7 @@ def _execution_result(value: Any) -> JobExecutionResult:
         output_asset_id = value.get("output_asset_id")
         return JobExecutionResult(
             output_asset_id=uuid.UUID(str(output_asset_id)) if output_asset_id else None,
+            output_asset_ids=tuple(uuid.UUID(str(item)) for item in value.get("output_asset_ids", [])),
             provider_request_id=value.get("provider_request_id"),
             metrics=dict(value.get("metrics") or {}),
         )
@@ -317,6 +326,7 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = settings.worker_queue_name
     max_jobs = settings.worker_max_jobs
-    job_timeout = settings.worker_job_timeout_seconds
+    # The inner per-operation timeout still applies; batches may run longer than single images.
+    job_timeout = max(settings.worker_job_timeout_seconds, 3660)
     keep_result = 0
     allow_abort_jobs = True

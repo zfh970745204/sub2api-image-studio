@@ -1017,6 +1017,9 @@ class ImageJob(Base):
     output_asset_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("assets.id", ondelete="RESTRICT")
     )
+    output_asset_ids: Mapped[list[str]] = mapped_column(
+        JSON_VALUE, nullable=False, default=list, server_default="[]"
+    )
     quote_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("job_quotes.id", ondelete="RESTRICT"), nullable=False
     )

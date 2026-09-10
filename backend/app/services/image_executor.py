@@ -5,6 +5,7 @@ import hashlib
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from sqlalchemy import update
@@ -117,33 +118,25 @@ class ImageJobExecutor:
         started = time.perf_counter()
         await self._progress(claim, 8)
         source_data = await self._source_data(claim)
+        staged = []
+        finished = False
+        provider_request_id = None
         try:
             await self._progress(claim, 20)
-            output, extension, provider_request_id, metadata = await self._execute(
-                claim, source_data
-            )
-            await self._progress(claim, 80)
-            prepared = await asyncio.to_thread(
-                prepare_asset,
-                output,
-                kind="vector" if extension == "svg" else "result",
-                max_megapixels=200,
-            )
-            await self._progress(claim, 90)
-            asset = await self.assets.store(
-                self.database,
-                self.storage,
-                owner_id=claim.user_id,
-                prepared=prepared,
-                kind="vector" if prepared.extension == "svg" else "result",
-                operation_code=claim.operation_code,
-                retention_days=claim.retention_days,
-                parent_asset_id=claim.source_asset_id,
-                source_job_id=claim.job_id,
-                metadata=metadata,
-                publish=False,
-                request_id=f"job:{claim.job_id}",
-            )
+            count = int(claim.parameters.get("image_count", 1)) if claim.operation_code == "ai.ecommerce" else 1
+            async for output, extension, provider_request_id, metadata in self._outputs(claim, source_data):
+                prepared = await asyncio.to_thread(prepare_asset, output, kind="vector" if extension == "svg" else "result", max_megapixels=200)
+                asset = await self.assets.store(
+                    self.database, self.storage, owner_id=claim.user_id, prepared=prepared,
+                    kind="vector" if prepared.extension == "svg" else "result",
+                    operation_code=claim.operation_code, retention_days=claim.retention_days,
+                    parent_asset_id=claim.source_asset_id or (uuid.UUID(claim.parameters["reference_asset_ids"][0]) if claim.parameters.get("reference_asset_ids") else None),
+                    source_job_id=claim.job_id, metadata=metadata, publish=False,
+                    request_id=f"job:{claim.job_id}",
+                )
+                staged.append(asset)
+                await self._progress(claim, 20 + round(72 * len(staged) / count))
+            finished = True
         except RetryableJobError as exc:
             if exc.code == "SUB2API_CIRCUIT_OPEN":
                 async with self.database.session_factory() as session:
@@ -166,13 +159,20 @@ class ImageJobExecutor:
             raise RetryableJobError("OBJECT_STORAGE_UNAVAILABLE", "对象存储暂时不可用") from exc
         except RuntimeError as exc:
             raise PermanentJobError("IMAGE_ENGINE_UNAVAILABLE", str(exc)) from exc
+        finally:
+            if not finished:
+                # Also runs for cancellation/timeouts; never publish or charge for a partial set.
+                for item in staged:
+                    await self.discard_output(item.id)
         await self._progress(claim, 96)
         return {
-            "output_asset_id": asset.id,
+            "output_asset_id": staged[0].id,
+            "output_asset_ids": [item.id for item in staged],
             "provider_request_id": provider_request_id,
             "metrics": {
                 "duration_ms": round((time.perf_counter() - started) * 1000),
-                "output_size_bytes": asset.size_bytes,
+                "output_size_bytes": sum(item.size_bytes for item in staged),
+                "output_count": len(staged),
             },
         }
 
@@ -234,7 +234,8 @@ class ImageJobExecutor:
         parameters = claim.parameters
         if operation == "ai.generate":
             clients = await self._sub2api_clients(claim)
-            prompt = self._required_text(parameters, "prompt")
+            refs = await self._references(claim, source)
+            prompt = str(parameters.get("prompt", "")).strip() or "Create a polished image using the supplied references. Preserve the subject's identity and design."
             size = self._choice(
                 parameters, "size", "1024x1024", {"auto", "1024x1024", "1024x1536", "1536x1024"}
             )
@@ -246,12 +247,7 @@ class ImageJobExecutor:
             )
             upstream = await self._call_with_failover(
                 clients,
-                lambda client: client.generate(
-                    prompt=prompt,
-                    size=size,
-                    quality=quality,
-                    output_format=output_format,
-                ),
+                lambda client: client.edit(image_png=refs[0], reference_images=refs[1:], prompt=prompt, size=size, quality=quality, output_format=output_format) if refs else client.generate(prompt=prompt, size=size, quality=quality, output_format=output_format),
             )
             return (
                 upstream.data,
@@ -358,6 +354,68 @@ class ImageJobExecutor:
             )
             return output, "svg", None, metadata
         raise PermanentJobError("OPERATION_EXECUTOR_MISSING", "图片操作没有可用执行器")
+
+    async def _references(self, claim: ClaimedJob, source: bytes | None) -> list[bytes]:
+        ids = list(dict.fromkeys(([str(claim.source_asset_id)] if claim.source_asset_id else []) + list(claim.parameters.get("reference_asset_ids", []))))
+        images = []
+        for asset_id in ids:
+            data = source if str(claim.source_asset_id) == asset_id else await self._source_data(replace(claim, source_asset_id=uuid.UUID(asset_id)))
+            if data is not None:
+                # Stored user images are normalized PNGs by AssetService.
+                images.append(data)
+        return images
+
+    async def _outputs(self, claim: ClaimedJob, source: bytes | None):
+        if claim.operation_code != "ai.ecommerce":
+            yield await self._execute(claim, source)
+            return
+        refs = await self._references(claim, source)
+        clients = await self._sub2api_clients(claim)
+        parameters = claim.parameters
+        count = int(parameters.get("image_count", 1))
+        platform = parameters.get("platform", "amazon")
+        briefs = {
+            "amazon": "Amazon style. First image: pure white RGB255 background, product only, centered and uncropped, no props or text. Subsequent images: clean detail or use-context photography, no invented claims.",
+            "etsy": "Etsy style: tactile materials, warm natural daylight, considered handmade-product styling. Keep the actual item prominent.",
+            "shopify": "Shopify brand storefront: refined editorial photography, restrained palette, consistent studio lighting.",
+            "taobao": "Taobao/Tmall product listing: clean commercial photography, immediately legible product silhouette, deliberate negative space.",
+            "jd": "JD product listing: precise materials, uncluttered studio photography, realistic proportions, clean background.",
+            "douyin": "Douyin product listing: natural contemporary lifestyle scene, strong product visibility, clean mobile-friendly composition.",
+        }
+        shots = ["hero product view", "closer material and print detail", "natural use-context view", "alternate crop of the same visible side", "studio composition", "close texture detail", "minimal lifestyle composition", "final catalog view"]
+        anchor = None
+        for index in range(count):
+            prompt = (
+                f"Create ONE separate ecommerce product photograph, image {index + 1} of {count}: {shots[index]}. "
+                f"{briefs[platform]} User brief: {parameters.get('prompt', '')}. "
+                "All input photos describe the SAME product. Preserve exact design, print, lettering, color, proportions, materials and distinctive details. "
+                "When the final input is a generated hero image, treat it as the visual identity anchor for this collection. "
+                "Change only composition, background and lighting as appropriate. Do not invent unseen product features, accessories, labels or specifications. "
+                "No collage, contact sheet, frame, watermark, marketing text or badges. Produce a single image filling the canvas."
+            )
+            images = [*refs, *([anchor] if anchor is not None else [])]
+            options = {
+                "prompt": prompt,
+                "size": str(parameters.get("size", "1024x1024")),
+                "quality": str(parameters.get("quality", "high")),
+                "output_format": "png",
+            }
+            if images:
+                primary, extra_images = images[0], images[1:]
+                upstream = await self._call_with_failover(
+                    clients,
+                    lambda client, primary=primary, extra_images=extra_images, options=options: client.edit(
+                        image_png=primary, reference_images=extra_images, **options
+                    ),
+                )
+            else:
+                upstream = await self._call_with_failover(
+                    clients,
+                    lambda client, options=options: client.generate(**options),
+                )
+            if anchor is None:
+                anchor = upstream.data
+            yield upstream.data, "png", None, {"platform": platform, "image_index": index + 1, "image_count": count, "reference_asset_ids": parameters.get("reference_asset_ids", []), "identity_anchor": "first-output", "revised_prompt": upstream.revised_prompt}
 
     async def _mask_data(self, claim: ClaimedJob) -> bytes | None:
         raw_id = claim.parameters.get("mask_asset_id")

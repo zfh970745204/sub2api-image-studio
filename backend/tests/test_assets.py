@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -164,7 +165,9 @@ async def asset_context(tmp_path) -> AssetContext:
     app.state.settings = settings
     app.state.auth_service = auth_service
     app.state.object_storage = storage
-    app.state.runtime_services = type("Runtime", (), {"database": database})()
+    app.state.runtime_services = type(
+        "Runtime", (), {"database": database, "object_storage": storage}
+    )()
 
     async def enqueue(_job_id: uuid.UUID, _queue_name: str) -> bool:
         return True
@@ -655,6 +658,85 @@ async def test_job_output_is_hidden_until_success_transaction_commits(
             asset_context.database, asset_id=pending.id, job_id=job_id
         )
         assert (await client.get(f"/api/v1/assets/{pending.id}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_batch_job_download_is_owner_scoped_and_contains_all_outputs(
+    asset_context: AssetContext,
+) -> None:
+    owner = await seed_user(asset_context, email="batch-owner@example.com")
+    stranger = await seed_user(asset_context, email="batch-stranger@example.com")
+    raw = raster_bytes()
+    async with (
+        client_for(asset_context, "batch-owner") as owner_client,
+        client_for(asset_context, "batch-stranger") as stranger_client,
+    ):
+        await login(owner_client, owner.email)
+        await login(stranger_client, stranger.email)
+        source = (await upload(owner_client, raw)).json()["asset"]
+        quote_response = await owner_client.post(
+            "/api/v1/jobs/quote",
+            json={
+                "operation_code": "color.effect",
+                "source_asset_id": source["id"],
+                "parameters": {"mode": "grayscale"},
+            },
+        )
+        assert quote_response.status_code == 201, quote_response.text
+        created = await owner_client.post(
+            "/api/v1/jobs",
+            headers={"Idempotency-Key": "batch-download-job"},
+            json={
+                "quote_id": quote_response.json()["quote"]["id"],
+                "parameters": {"mode": "grayscale"},
+            },
+        )
+        assert created.status_code == 201, created.text
+        job_id = uuid.UUID(created.json()["job"]["id"])
+
+    prepared = prepare_asset(raw, kind="result", max_megapixels=40)
+    outputs = []
+    for index in range(2):
+        outputs.append(
+            await AssetService().store(
+                asset_context.database,
+                asset_context.storage,
+                owner_id=owner.id,
+                prepared=prepared,
+                kind="result",
+                operation_code="color.effect",
+                retention_days=30,
+                parent_asset_id=uuid.UUID(source["id"]),
+                source_job_id=job_id,
+                publish=False,
+                request_id=f"batch-output-{index}",
+            )
+        )
+    async with asset_context.database.session_factory() as session:
+        job = await session.get(ImageJob, job_id)
+        assert job is not None
+        job.status = "succeeded"
+        job.output_asset_id = outputs[0].id
+        job.output_asset_ids = [str(item.id) for item in outputs]
+        job.completed_at = datetime.now(UTC)
+        await session.commit()
+    for output in outputs:
+        assert await AssetService().publish_job_output(
+            asset_context.database, asset_id=output.id, job_id=job_id
+        )
+
+    async with (
+        client_for(asset_context, "batch-owner-download") as owner_client,
+        client_for(asset_context, "batch-stranger-download") as stranger_client,
+    ):
+        await login(owner_client, owner.email)
+        await login(stranger_client, stranger.email)
+        downloaded = await owner_client.get(f"/api/v1/jobs/{job_id}/download")
+        assert downloaded.status_code == 200, downloaded.text
+        with zipfile.ZipFile(BytesIO(downloaded.content)) as bundle:
+            assert bundle.namelist() == ["image-01.png", "image-02.png"]
+            assert [bundle.read(name) for name in bundle.namelist()] == [prepared.data, prepared.data]
+        assert (await stranger_client.get(f"/api/v1/jobs/{job_id}/download")).status_code == 404
 
 
 @pytest.mark.asyncio

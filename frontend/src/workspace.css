@@ -13,7 +13,7 @@
 @media (max-width: 760px) {
   .user-topbar:has(.user-notifications) { -webkit-backdrop-filter: none; backdrop-filter: none; }
   .user-notification-scrim { display: block; position: fixed; inset: 64px 0 0; z-index: 109; border: 0; background: #17142940; backdrop-filter: blur(3px); }
-  .user-notification-wrap .user-notifications { position: fixed; top: calc(72px + env(safe-area-inset-top, 0px)); left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); width: auto; max-height: calc(100dvh - 88px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); border-radius: 16px; }
+  .user-notification-wrap .user-notifications { position: fixed; top: calc(72px + env(safe-area-inset-top, 0px)); left: 50%; right: auto; width: min(420px, calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))); max-height: calc(100dvh - 88px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); border-radius: 16px; }
   .user-notification-list > button { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 16px; }
   .user-notification-list time { justify-self: start; font-size: 10px; }
 }
@@ -135,6 +135,8 @@ body { -webkit-font-smoothing: antialiased; line-height: 1.5; }
 :root[data-user-theme="dark"]:has(.user-shell) { color-scheme: dark; }
 
 .admin-shell, .admin-login-page, .admin-boot { --admin-accent: #28634f; --admin-accent-soft: #e5eee2; --admin-ink: #273d36; --admin-muted: #758078; --admin-line: #e0e3da; --admin-soft-line: #eceee7; --admin-canvas: #f6f6f1; --admin-surface: #f7f8f3; }
+.admin-boot { position: fixed; inset: 0; width: 100%; min-height: 100dvh; }
+.admin-boot > * { justify-self: center; }
 .admin-sidebar { background: #f0f2eb; border-color: #dce1d5; }
 .admin-nav button { border-radius: 9px; }
 .admin-nav button:hover { background: #e5e9df; }

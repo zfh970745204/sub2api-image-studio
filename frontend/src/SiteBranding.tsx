@@ -2,8 +2,8 @@ import { createContext, type ReactNode, useContext, useEffect, useState } from "
 
 export const defaultBranding = {
   site_name: "Sub2Image", logo_url: "/brand-symbol.svg",
-  login_image_url: "/brand/login-art.webp", register_image_url: "/brand/register-art.webp",
-  home_image_url: "/brand/home-art.webp",
+  login_image_url: "/brand/login-studio-v3.webp", register_image_url: "/brand/register-studio-v3.webp",
+  home_image_url: "/brand/home-studio-v3.webp",
 };
 const BrandingContext = createContext(defaultBranding);
 export const useSiteBranding = () => useContext(BrandingContext);

@@ -42,9 +42,11 @@ export function useCursorPage<T>(filterKey: string, fetchPage: (cursor: string |
 export function Pagination({ pager }: { pager: { page: number; limit: number; loading: boolean; hasNext: boolean; next: () => void; previous: () => void; resize: (size: number) => void; load: () => Promise<void> } }) {
   return <nav className="user-pagination" aria-label="分页">
     <label>每页 <select value={pager.limit} onChange={(event) => pager.resize(Number(event.target.value))} disabled={pager.loading}><option value={20}>20 条</option><option value={40}>40 条</option><option value={80}>80 条</option></select></label>
-    <span aria-live="polite">第 {pager.page} 页</span>
+    <div className="pagination-navigation">
     <button type="button" className="user-secondary" onClick={pager.previous} disabled={pager.loading || pager.page === 1}>上一页</button>
+    <span aria-live="polite">第 {pager.page} 页</span>
     <button type="button" className="user-secondary" onClick={pager.next} disabled={pager.loading || !pager.hasNext}>下一页</button>
-    <button type="button" className="user-text-button" onClick={() => void pager.load()} disabled={pager.loading}>刷新</button>
+    </div>
+    <button type="button" className="pagination-refresh" onClick={() => void pager.load()} disabled={pager.loading}>{pager.loading ? "加载中" : "刷新"}</button>
   </nav>;
 }
