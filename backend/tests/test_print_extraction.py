@@ -4,7 +4,6 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import httpx
-import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 from sqlalchemy import select
@@ -50,7 +49,7 @@ def test_extraction_rejects_opaque_background_and_empty_artwork():
         finalize_print_extraction(_blank_green())
 
 
-def test_magenta_key_residuals_are_repaired_without_changing_alpha():
+def test_small_magenta_ink_inside_white_is_not_mistaken_for_edge_spill():
     image = Image.new("RGBA", (128, 128), (255, 0, 255, 255))
     draw = ImageDraw.Draw(image)
     draw.rectangle((30, 30, 98, 96), fill=(255, 255, 255, 255))
@@ -61,14 +60,10 @@ def test_magenta_key_residuals_are_repaired_without_changing_alpha():
 
     result, metadata = finalize_print_extraction(raw.getvalue())
     with Image.open(BytesIO(result)) as output:
-        rgba = np.asarray(output.convert("RGBA"))
-        red, green, blue, alpha = np.moveaxis(rgba, -1, 0)
-        magenta = (np.minimum(red.astype(int), blue.astype(int)) - green.astype(int) > 8) & (
-            alpha > 20
-        )
-        assert not np.any(magenta)
-        assert output.getpixel((42, 42))[3] == 255
-    assert metadata["key_color_residual_pixels"] >= 4
+        for point in ((42, 42), (56, 58), (78, 74), (90, 88)):
+            assert output.getpixel(point) == (255, 85, 255, 255)
+        assert output.getpixel((1, 1))[3] == 0
+    assert metadata["color_preservation"] == "interior-ink-unchanged-v3"
 
 
 def _blank_green():
@@ -79,11 +74,16 @@ def _blank_green():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "operation,valid",
-    [("ai.extract_print", True), ("ai.extract_print", False), ("ai.redraw", True)],
+    "operation,valid,native",
+    [
+        ("ai.extract_print", True, False),
+        ("ai.extract_print", False, False),
+        ("ai.redraw", True, False),
+        ("ai.extract_print", True, True),
+    ],
 )
 async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
-    asset_context, operation, valid
+    asset_context, operation, valid, native
 ):
     owner = await seed_user(asset_context, email="print-owner@example.test")
     async with client_for(asset_context, "print-owner") as client:
@@ -109,6 +109,12 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
 
     calls = []
     raw = print_image((0, 255, 0, 255) if valid else (220, 220, 220, 255))
+    if native:
+        with Image.open(BytesIO(print_image((0, 0, 0, 0)))) as image:
+            ImageDraw.Draw(image).line((29, 32, 29, 94), fill=(128, 255, 128, 128))
+            buffer = BytesIO()
+            image.save(buffer, "PNG")
+            raw = buffer.getvalue()
 
     def upstream(request):
         calls.append(request.content)
@@ -155,6 +161,10 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
                 BytesIO(await asset_context.storage.get_object(output.object_key))
             ) as image:
                 assert image.getpixel((1, 1))[3] == (0 if operation == "ai.extract_print" else 255)
+                if native:
+                    red, green, blue, alpha = image.getpixel((29, 40))
+                    assert min(red, green, blue) >= 253
+                    assert alpha == 128
         else:
             assert job.status == "failed" and job.refund_status == "refunded"
             assert job.output_asset_id is None and balance == 200

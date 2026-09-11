@@ -311,6 +311,8 @@ class ImageJobExecutor:
                     "orange warmth, cyan eyes or darken green ink. Keep white and black ink intact. "
                     f"Use ONLY a perfectly uniform {key_color} background with a small clear margin. "
                     "This color is a removable background, never a replacement for design colors. "
+                    "Keep foreground edge colors free of background reflection or colored outlines; "
+                    "retain fine hair, thin strokes and translucent details with natural antialiasing. "
                     "No mockup, checkerboard, ground plane, shadow or added elements."
                 )
             if instruction:
@@ -340,7 +342,9 @@ class ImageJobExecutor:
             )
             await self._progress(claim, 65)
             if operation == "ai.extract_print":
-                output, metadata = await asyncio.to_thread(finalize_print_extraction, upstream.data)
+                output, metadata = await asyncio.to_thread(
+                    finalize_print_extraction, upstream.data, key_color=key_color
+                )
                 return (
                     output,
                     "png",

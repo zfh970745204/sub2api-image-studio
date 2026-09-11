@@ -107,12 +107,17 @@ def upscale(raw_png: bytes, scale: int, sharpen: bool = True) -> bytes:
             raise ImageInputError("Upscaled output exceeds the 80 megapixel processing limit.")
 
         if image.mode == "RGBA":
-            rgb = image.convert("RGB").resize(target, Image.Resampling.LANCZOS)
-            alpha = image.getchannel("A").resize(target, Image.Resampling.LANCZOS)
+            # Pillow resizes RGBA in premultiplied-alpha space. Resizing RGB and
+            # alpha separately bleeds invisible green/magenta pixels into the edge.
+            result = image.resize(target, Image.Resampling.LANCZOS)
             if sharpen:
-                rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.1, percent=90, threshold=3))
-            result = rgb.convert("RGBA")
-            result.putalpha(alpha)
+                rgb = result.convert("RGB")
+                interior = result.getchannel("A").filter(ImageFilter.MinFilter(7))
+                interior = interior.point(lambda value: 255 if value == 255 else 0)
+                sharpened = rgb.filter(ImageFilter.UnsharpMask(radius=1.1, percent=90, threshold=3))
+                alpha = result.getchannel("A")
+                result = Image.composite(sharpened, rgb, interior).convert("RGBA")
+                result.putalpha(alpha)
         else:
             result = image.resize(target, Image.Resampling.LANCZOS)
             if sharpen:
@@ -345,16 +350,31 @@ def print_extraction_key_color(raw_png: bytes) -> str:
     return "#FF00FF" if greens > magentas else "#00FF00"
 
 
-def finalize_print_extraction(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
+def finalize_print_extraction(
+    raw_png: bytes, *, key_color: str | None = None
+) -> tuple[bytes, dict[str, Any]]:
     """Preserve native alpha or key the legacy redraw's flat chroma background."""
     with Image.open(BytesIO(raw_png)) as source:
         source.load()
         rgba = source.convert("RGBA")
         alpha_min, alpha_max = rgba.getchannel("A").getextrema()
         if alpha_min == 0 and alpha_max > 0:
+            metadata: dict[str, Any] = {"method": "native-alpha", "transparent_background": True}
+            # Native alpha alone is not evidence of color spill. Only use a known
+            # background explicitly requested for this generation.
+            if key_color in {"#00FF00", "#FF00FF"}:
+                pixels = np.asarray(rgba, dtype=np.uint8)
+                rgb, alpha, cleanup = _unmix_chroma_edges(
+                    pixels[:, :, :3],
+                    np.asarray(ImageColor.getrgb(key_color), dtype=np.float32),
+                    pixels[:, :, 3] == 0,
+                    native_alpha=pixels[:, :, 3],
+                )
+                rgba = Image.fromarray(np.dstack([rgb, alpha]), "RGBA")
+                metadata.update(cleanup)
             output = BytesIO()
             rgba.save(output, format="PNG", optimize=True)
-            return output.getvalue(), {"method": "native-alpha", "transparent_background": True}
+            return output.getvalue(), metadata
     if not has_chroma_key_background(raw_png):
         raise ImageInputError(
             "图片服务未返回透明或纯色底的印花，无法安全去除产品背景。请重试，或裁切到印花区域后重新上传。"
@@ -365,6 +385,141 @@ def finalize_print_extraction(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
         if alpha_min != 0 or alpha_max == 0:
             raise ImageInputError("未提取到有效印花，请上传印花更清晰的产品照片后重试。")
     return output, {**metadata, "transparent_background": True}
+
+
+def _unmix_chroma_edges(
+    image: np.ndarray,
+    background: np.ndarray,
+    background_mask: np.ndarray,
+    *,
+    native_alpha: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Recover C = alpha * F + (1 - alpha) * B in a bounded, evidenced edge band.
+
+    Interior ink is never inpainted or globally desaturated. Narrow strokes can
+    donate their clean ridge colors without requiring a thick eroded interior.
+    Ambiguous edges without a nearby donor from the same component stay intact.
+    """
+    radius = int(np.clip(round(min(image.shape[:2]) * 0.006), 8, 12))
+    pixels = image.astype(np.float32)
+    color_distance = np.linalg.norm(pixels - background, axis=2)
+    alpha = (
+        native_alpha.astype(np.float32) / 255
+        if native_alpha is not None
+        else (color_distance > 28).astype(np.float32)
+    )
+    foreground = image.copy()
+    corrected_count = 0
+    if np.any(background_mask) and not np.all(background_mask):
+        visible = (~background_mask).astype(np.uint8)
+        depth = cv2.distanceTransform(visible, cv2.DIST_L2, 5)
+        kernel = np.ones((3, 3), np.uint8)
+        ridge = (depth >= cv2.dilate(depth, kernel) - 0.01) & (
+            color_distance
+            >= cv2.dilate(color_distance, np.ones((2 * radius + 1,) * 2, np.uint8)) - 0.5
+        )
+        red, green, blue = np.moveaxis(pixels, -1, 0)
+        key_signal = (
+            green - np.maximum(red, blue)
+            if background[1] > background[0]
+            else np.minimum(red, blue) - green
+        )
+        core = depth > radius
+        stable = cv2.dilate(color_distance, kernel) - cv2.erode(color_distance, kernel) <= 8
+        trusted_core = core & stable
+        solid = trusted_core | (ridge & (key_signal <= 25))
+        solid &= ~background_mask & (alpha >= 0.98)
+        if native_alpha is not None:
+            solid &= native_alpha >= 250
+        if np.any(solid):
+            # Label only the donor boundary, keeping the color lookup small even
+            # for large opaque areas. Distance-transform work remains linear.
+            donors = solid & (cv2.erode(solid.astype(np.uint8), kernel) == 0)
+            donor_distance, nearest = cv2.distanceTransformWithLabels(
+                (~donors).astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL
+            )
+            _, components = cv2.connectedComponents(visible, connectivity=8)
+            colors = np.zeros((int(nearest.max()) + 1, 3), dtype=np.float32)
+            labels = np.zeros(len(colors), dtype=np.int32)
+            colors[nearest[donors]] = pixels[donors]
+            labels[nearest[donors]] = components[donors]
+            # Very thin antialiased strokes may have no fully opaque local pixel.
+            # Borrow a cleaner color along the same stroke only when both colors
+            # lie on the same key/ink mixing line. Never replace interior colors.
+            donor_colors = pixels[donors]
+            vectors = donor_colors - background
+            lengths = np.maximum(np.linalg.norm(vectors, axis=1), 1)
+            bins = np.rint(vectors / lengths[:, None] * 16).astype(np.int32)
+            _, groups = np.unique(
+                np.column_stack([components[donors], bins]), axis=0, return_inverse=True
+            )
+            strongest = np.zeros(int(groups.max()) + 1, dtype=np.float32)
+            np.maximum.at(strongest, groups, lengths)
+            indices = np.full(len(strongest), len(groups), dtype=np.int32)
+            np.minimum.at(
+                indices,
+                groups,
+                np.where(lengths == strongest[groups], np.arange(len(groups)), len(groups)),
+            )
+            cleaner = donor_colors[indices[groups]]
+            cleaner_vectors = cleaner - background
+            ratio = lengths / np.maximum(np.linalg.norm(cleaner_vectors, axis=1), 1)
+            consistent = np.linalg.norm(vectors - ratio[:, None] * cleaner_vectors, axis=1) < 2
+            refine = ~trusted_core[donors] & consistent & (ratio >= 0.75)
+            colors[nearest[donors][refine]] = cleaner[refine]
+            edge = (
+                (depth <= radius)
+                & ~background_mask
+                & (donor_distance <= radius * 3)
+                & (labels[nearest] == components)
+            )
+            # The expensive color math only needs the narrow edge, not every
+            # full-resolution pixel; concurrent image jobs keep a smaller footprint.
+            samples = pixels[edge]
+            estimate = colors[nearest[edge]]
+            direction = estimate - background
+            fraction = np.clip(
+                np.sum((samples - background) * direction, axis=1)
+                / np.maximum(np.sum(direction * direction, axis=1), 1),
+                0,
+                1,
+            )
+            reconstructed = background + fraction[:, None] * direction
+            residual = np.linalg.norm(reconstructed - samples, axis=1)
+            # A near-perfect color-line fit is required at low coverage; otherwise
+            # dividing by alpha amplifies tiny errors into a new colored fringe.
+            confident = (fraction < 0.995) & (residual <= np.maximum(2, fraction * 12))
+            unmixed = (samples - (1 - fraction[:, None]) * background) / np.maximum(
+                fraction[:, None], 0.02
+            )
+            edge[edge] = confident
+            foreground[edge] = np.uint8(np.clip(np.rint(unmixed[confident]), 0, 255))
+            if native_alpha is None:
+                alpha[edge] = fraction[confident]
+            else:
+                # A supplied soft alpha already describes coverage. Do not apply
+                # the matte twice and erase smoke/hair. Opaque leftover rims still
+                # need their coverage recovered.
+                opaque_edge = edge & (native_alpha == 255)
+                alpha[opaque_edge] = fraction[confident][native_alpha[edge] == 255]
+                # A pixel containing only the known screen color is residual
+                # background, not translucent black ink after division by alpha.
+                near_key = edge.copy()
+                near_key[edge] = fraction[confident] < 0.02
+                alpha[near_key] = 0
+            corrected_count = int(np.count_nonzero(edge))
+    result_alpha = np.uint8(np.clip(np.rint(alpha * 255), 0, 255))
+    foreground[result_alpha == 0] = 0
+    return (
+        foreground,
+        result_alpha,
+        {
+            "edge_cleanup": "local-color-unmix-v3",
+            "edge_cleanup_radius": radius,
+            "key_color_residual_pixels": corrected_count,
+            "color_preservation": "interior-ink-unchanged-v3",
+        },
+    )
 
 
 def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
@@ -384,13 +539,6 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
         axis=0,
     )
     background = np.median(border_pixels, axis=0).astype(np.uint8)
-    lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB).astype(np.float32)
-    lab_background = cv2.cvtColor(background.reshape(1, 1, 3), cv2.COLOR_RGB2LAB).astype(
-        np.float32
-    )[0, 0]
-    distance = np.linalg.norm(lab_image - lab_background, axis=2)
-
-    pixels = image.astype(np.float32)
     background_float = background.astype(np.float32)
     red, green, blue = (float(value) for value in background)
     green_signal = green - max(red, blue)
@@ -403,6 +551,11 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
     else:
         # Neutral backgrounds can also be printed ink. Remove only regions connected
         # to the canvas boundary so enclosed white fills remain opaque.
+        lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB).astype(np.float32)
+        lab_background = cv2.cvtColor(background.reshape(1, 1, 3), cv2.COLOR_RGB2LAB).astype(
+            np.float32
+        )[0, 0]
+        distance = np.linalg.norm(lab_image - lab_background, axis=2)
         candidates = np.uint8(distance < 22)
         _, labels = cv2.connectedComponents(candidates, connectivity=8)
         border_labels = np.unique(
@@ -418,65 +571,30 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
     if key_mode != "connected-neutral":
         # Only colors very close to the actual key are background. Hue dominance
         # over the entire image destroys green ink, eyes and magenta design details.
-        key_pixels = np.linalg.norm(pixels - background_float, axis=2) <= 28
-        alpha = np.where(key_pixels, 0.0, 1.0).astype(np.float32)
-        boundary = cv2.dilate(key_pixels.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
-        solid = ~boundary
-        if np.any(solid):
-            # Estimate foreground from nearby opaque pixels, then unmix only the
-            # two-pixel transition at the key boundary. All solid ink stays exact.
-            _, nearest = cv2.distanceTransformWithLabels(
-                (~solid).astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL
-            )
-            colors = np.zeros((int(nearest.max()) + 1, 3), dtype=np.float32)
-            colors[nearest[solid]] = pixels[solid]
-            foreground_estimate = colors[nearest]
-            direction = foreground_estimate - background_float
-            fraction = np.clip(
-                np.sum((pixels - background_float) * direction, axis=2)
-                / np.maximum(np.sum(direction * direction, axis=2), 1),
-                0,
-                1,
-            )
-            reconstructed = background_float + fraction[:, :, None] * direction
-            edge = boundary & ~key_pixels & (np.linalg.norm(reconstructed - pixels, axis=2) < 16)
-            alpha[edge] = fraction[edge]
+        # Near-key pixels are not automatically thrown away: a faint green edge
+        # can be close to a green screen. Keep them eligible for local recovery;
+        # isolated background noise without a foreground donor stays transparent.
+        key_pixels = np.linalg.norm(image.astype(np.float32) - background_float, axis=2) <= 6
+        foreground, alpha_bytes, cleanup = _unmix_chroma_edges(image, background_float, key_pixels)
+        output = BytesIO()
+        Image.fromarray(np.dstack([foreground, alpha_bytes]), "RGBA").save(
+            output, format="PNG", optimize=True
+        )
+        return output.getvalue(), {
+            "method": "solid-background-to-alpha",
+            "estimated_background_color": [int(value) for value in background],
+            "key_mode": key_mode,
+            **cleanup,
+        }
 
     alpha = alpha.astype(np.float32)
+    pixels = image.astype(np.float32)
     alpha[alpha < 0.035] = 0
     alpha[alpha > 0.995] = 1
     alpha_safe = np.maximum(alpha[:, :, None], 0.04)
     foreground = (pixels - (1 - alpha[:, :, None]) * background_float) / alpha_safe
     foreground = np.where(alpha[:, :, None] > 0.01, foreground, 0)
 
-    # Chroma-key generations can leave pink anti-aliased specks inside light ink.
-    # Repair only this legacy magenta-key path; native-alpha results must remain exact.
-    residual_count = 0
-    if key_mode == "magenta":
-        red, green, blue = np.moveaxis(foreground, -1, 0)
-        light_ink = np.min(foreground, axis=2) >= 180
-        near_light_ink = cv2.dilate(light_ink.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-        candidates = (np.minimum(red, blue) - green > 8) & (alpha > 0.02) & near_light_ink
-        component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
-            candidates.astype(np.uint8), connectivity=8
-        )
-        maximum_speck_area = max(4, round(image.shape[0] * image.shape[1] * 0.001))
-        residual = np.zeros_like(candidates)
-        for label in range(1, component_count):
-            if stats[label, cv2.CC_STAT_AREA] <= maximum_speck_area:
-                residual |= labels == label
-        residual_count = int(np.count_nonzero(residual))
-        if residual_count:
-            repair_mask = np.uint8(residual) * 255
-            repaired = np.empty_like(foreground, dtype=np.uint8)
-            for channel in range(3):
-                repaired[:, :, channel] = cv2.inpaint(
-                    np.uint8(np.clip(foreground[:, :, channel], 0, 255)),
-                    repair_mask,
-                    3,
-                    cv2.INPAINT_TELEA,
-                )
-            foreground = repaired.astype(np.float32)
     rgba = np.dstack([np.clip(foreground, 0, 255).astype(np.uint8), np.uint8(alpha * 255)])
 
     output = BytesIO()
@@ -485,7 +603,7 @@ def remove_solid_background(raw_png: bytes) -> tuple[bytes, dict[str, Any]]:
         "method": "solid-background-to-alpha",
         "estimated_background_color": [int(value) for value in background],
         "key_mode": key_mode,
-        "key_color_residual_pixels": residual_count,
+        "key_color_residual_pixels": 0,
         "color_preservation": "opaque-foreground-unchanged-v2",
     }
 

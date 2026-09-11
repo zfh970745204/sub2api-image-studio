@@ -14,5 +14,6 @@ htmlcov/
 *.log
 *.tsbuildinfo
 output/imagegen/
+output/chroma-review/
 frontend/vite.config.js
 frontend/vite.config.d.ts
