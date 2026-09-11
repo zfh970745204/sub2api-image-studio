@@ -351,18 +351,31 @@ def print_extraction_key_color(raw_png: bytes) -> str:
 
 
 def finalize_print_extraction(
-    raw_png: bytes, *, key_color: str | None = None
+    raw_png: bytes, *, key_color: str | None = None, require_native_alpha: bool = False
 ) -> tuple[bytes, dict[str, Any]]:
-    """Preserve native alpha or key the legacy redraw's flat chroma background."""
+    """Validate direct AI extraction without matting; legacy callers can still key flat backgrounds."""
     with Image.open(BytesIO(raw_png)) as source:
         source.load()
         rgba = source.convert("RGBA")
         alpha_min, alpha_max = rgba.getchannel("A").getextrema()
+        if alpha_max == 0:
+            raise ImageInputError("未提取到有效印花，请上传印花更清晰的产品照片后重试。")
+        if require_native_alpha:
+            alpha = np.asarray(rgba.getchannel("A"))
+            border = np.concatenate([alpha[0, :], alpha[-1, :], alpha[:, 0], alpha[:, -1]])
+            # An alpha channel or one transparent pixel inside a product photo is
+            # insufficient: the requested margin must actually be transparent.
+            if alpha_min != 0 or np.mean(border == 0) < 0.5:
+                raise ImageInputError(
+                    "图片服务未返回有效的透明底印花，请重试；若仍失败，请联系管理员检查图片服务。"
+                )
         if alpha_min == 0 and alpha_max > 0:
             metadata: dict[str, Any] = {"method": "native-alpha", "transparent_background": True}
             # Native alpha alone is not evidence of color spill. Only use a known
             # background explicitly requested for this generation.
-            if key_color in {"#00FF00", "#FF00FF"}:
+            if require_native_alpha:
+                metadata["color_preservation"] = "native-rgba-unchanged"
+            elif key_color in {"#00FF00", "#FF00FF"}:
                 pixels = np.asarray(rgba, dtype=np.uint8)
                 rgb, alpha, cleanup = _unmix_chroma_edges(
                     pixels[:, :, :3],

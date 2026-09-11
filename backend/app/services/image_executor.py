@@ -17,7 +17,6 @@ from app.image_ops import (
     apply_color_effect,
     finalize_print_extraction,
     has_chroma_key_background,
-    print_extraction_key_color,
     remove_background,
     remove_solid_background,
     upscale,
@@ -37,8 +36,14 @@ from app.services.security import SecurityService
 from app.sub2api import Sub2APIClient, Sub2APIError
 
 AI_EDIT_PROMPTS = {
-    # The detailed extraction prompt is composed with a source-safe key color in _execute.
-    "ai.extract_print": "Extract the print faithfully; source-safe instructions are applied at execution.",
+    "ai.extract_print": (
+        "提取参考图片中的完整印花图案，只要印花，保持原有的色彩和内容不变。"
+        "保留全部文字、字体、排版、比例和细节，包括白色与黑色印花。"
+        "去掉衣服、杯子等产品本体及其背景，校正褶皱和透视，得到平整、清晰的独立图案。"
+        "直接输出透明背景 PNG，背景区域的 Alpha 为 0，不要把棋盘格画进图片。"
+        "保留发丝、细线、烟雾等自然的半透明边缘，不要添加色边、阴影或描边。"
+        "完整图案居中，四周留少量透明边距，不裁掉任何设计。"
+    ),
     "ai.redraw": (
         "Faithfully restore the complete source image at high resolution. Recover natural edges, "
         "textures and fine detail, removing blur, compression artifacts, noise and jagged edges. "
@@ -300,21 +305,6 @@ class ImageJobExecutor:
                 parameters.get("instruction") or parameters.get("prompt") or ""
             ).strip()
             prompt = AI_EDIT_PROMPTS[operation]
-            key_color = None
-            if operation == "ai.extract_print":
-                key_color = await asyncio.to_thread(print_extraction_key_color, source)
-                prompt = (
-                    "Extract and flatten only the complete printed artwork from this product photo. "
-                    "Preserve the exact text, eye colors, ink hues, saturation, brightness, composition "
-                    "and fine detail. Remove the photographed product, folds, texture, lighting and "
-                    "perspective without redesigning or recoloring the artwork. Do not add contrast, "
-                    "orange warmth, cyan eyes or darken green ink. Keep white and black ink intact. "
-                    f"Use ONLY a perfectly uniform {key_color} background with a small clear margin. "
-                    "This color is a removable background, never a replacement for design colors. "
-                    "Keep foreground edge colors free of background reflection or colored outlines; "
-                    "retain fine hair, thin strokes and translucent details with natural antialiasing. "
-                    "No mockup, checkerboard, ground plane, shadow or added elements."
-                )
             if instruction:
                 prompt = f"{prompt}\nUser instruction: {instruction}"
             mask = await self._mask_data(claim)
@@ -343,7 +333,7 @@ class ImageJobExecutor:
             await self._progress(claim, 65)
             if operation == "ai.extract_print":
                 output, metadata = await asyncio.to_thread(
-                    finalize_print_extraction, upstream.data, key_color=key_color
+                    finalize_print_extraction, upstream.data, require_native_alpha=True
                 )
                 return (
                     output,
@@ -352,8 +342,7 @@ class ImageJobExecutor:
                     {
                         **metadata,
                         "revised_prompt": upstream.revised_prompt,
-                        "workflow": "faithful-product-print-extraction",
-                        "extraction_key_color": key_color,
+                        "workflow": "direct-transparent-print-extraction",
                     },
                 )
             return (

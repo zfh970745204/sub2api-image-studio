@@ -4,6 +4,7 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import httpx
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 from sqlalchemy import select
@@ -72,18 +73,85 @@ def _blank_green():
     return output.getvalue()
 
 
+def native_print_image():
+    with Image.open(BytesIO(print_image((0, 0, 0, 0)))) as image:
+        draw = ImageDraw.Draw(image)
+        # Pale green next to white is real ink here, not white mixed with a key.
+        draw.line((29, 32, 29, 94), fill=(128, 255, 128, 128))
+        draw.line((99, 32, 99, 94), fill=(255, 0, 255, 110))
+        draw.line((40, 15, 60, 25), fill=(245, 245, 245, 32))
+        draw.line((72, 15, 90, 25), fill=(0, 0, 0, 64))
+        draw.rectangle((40, 76, 50, 85), fill=(0, 255, 0, 255))
+        draw.rectangle((76, 76, 86, 85), fill=(255, 0, 255, 255))
+        output = BytesIO()
+        image.save(output, "PNG")
+        return output.getvalue()
+
+
+@pytest.mark.parametrize("key_color", [None, "#00FF00", "#FF00FF"])
+def test_direct_extraction_keeps_every_native_ink_and_soft_alpha_pixel(key_color):
+    raw = native_print_image()
+    result, metadata = finalize_print_extraction(
+        raw, key_color=key_color, require_native_alpha=True
+    )
+    with Image.open(BytesIO(raw)) as original, Image.open(BytesIO(result)) as output:
+        expected, actual = np.array(original), np.array(output)
+        np.testing.assert_array_equal(actual, expected)
+        for background in ("white", "black", "#666666"):
+            canvas = Image.new("RGBA", original.size, background)
+            np.testing.assert_array_equal(
+                np.array(Image.alpha_composite(canvas, output)),
+                np.array(Image.alpha_composite(canvas, original)),
+            )
+    assert metadata["method"] == "native-alpha"
+    assert metadata["color_preservation"] == "native-rgba-unchanged"
+
+
+@pytest.mark.parametrize("background", ["white", "black", "#00FF00", "#FF00FF", "#DDDDDD"])
+def test_direct_extraction_rejects_opaque_results_instead_of_keying_them(background):
+    with pytest.raises(ImageInputError, match="透明底印花"):
+        finalize_print_extraction(print_image(background), require_native_alpha=True)
+
+
+@pytest.mark.parametrize("hole", [(0, 0), (10, 10)])
+def test_one_transparent_pixel_does_not_validate_an_opaque_product_photo(hole):
+    with Image.open(BytesIO(print_image("white"))) as image:
+        image.putpixel(hole, (0, 0, 0, 0))
+        raw = BytesIO()
+        image.save(raw, "PNG")
+    with pytest.raises(ImageInputError, match="透明底印花"):
+        finalize_print_extraction(raw.getvalue(), require_native_alpha=True)
+
+
+def test_direct_extraction_rejects_painted_checkerboard_and_empty_alpha():
+    checkerboard = Image.new("RGBA", (128, 128), "white")
+    draw = ImageDraw.Draw(checkerboard)
+    for y in range(0, 128, 8):
+        for x in range(0, 128, 8):
+            if (x // 8 + y // 8) % 2:
+                draw.rectangle((x, y, x + 7, y + 7), fill="#DDDDDD")
+    draw.rectangle((30, 30, 96, 96), fill="black")
+    for image in (checkerboard, Image.new("RGBA", (128, 128))):
+        raw = BytesIO()
+        image.save(raw, "PNG")
+        with pytest.raises(ImageInputError):
+            finalize_print_extraction(raw.getvalue(), require_native_alpha=True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "operation,valid,native",
+    "operation,result_kind,valid",
     [
-        ("ai.extract_print", True, False),
-        ("ai.extract_print", False, False),
-        ("ai.redraw", True, False),
-        ("ai.extract_print", True, True),
+        ("ai.extract_print", "native", True),
+        ("ai.extract_print", "green", False),
+        ("ai.extract_print", "magenta", False),
+        ("ai.extract_print", "opaque", False),
+        ("ai.extract_print", "empty", False),
+        ("ai.redraw", "opaque", True),
     ],
 )
 async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
-    asset_context, operation, valid, native
+    asset_context, operation, result_kind, valid
 ):
     owner = await seed_user(asset_context, email="print-owner@example.test")
     async with client_for(asset_context, "print-owner") as client:
@@ -108,13 +176,16 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
         job_id = uuid.UUID(created.json()["job"]["id"])
 
     calls = []
-    raw = print_image((0, 255, 0, 255) if valid else (220, 220, 220, 255))
-    if native:
-        with Image.open(BytesIO(print_image((0, 0, 0, 0)))) as image:
-            ImageDraw.Draw(image).line((29, 32, 29, 94), fill=(128, 255, 128, 128))
-            buffer = BytesIO()
-            image.save(buffer, "PNG")
-            raw = buffer.getvalue()
+    if result_kind == "native":
+        raw = native_print_image()
+    elif result_kind == "empty":
+        buffer = BytesIO()
+        Image.new("RGBA", (128, 128)).save(buffer, "PNG")
+        raw = buffer.getvalue()
+    else:
+        raw = print_image(
+            {"green": "#00FF00", "magenta": "#FF00FF", "opaque": "white"}[result_kind]
+        )
 
     def upstream(request):
         calls.append(request.content)
@@ -141,12 +212,16 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
     await execute_image_job({"runtime": runtime, "image_job_executor": executor}, str(job_id))
     assert len(calls) == 1
     if operation == "ai.extract_print":
-        assert b"eye colors, ink hues, saturation, brightness" in calls[0]
-        assert b"Keep white and black ink intact" in calls[0]
-        assert b"Use ONLY a perfectly uniform" in calls[0]
+        assert "保持原有的色彩和内容不变".encode() in calls[0]
+        assert "直接输出透明背景 PNG".encode() in calls[0]
+        assert b"#00FF00" not in calls[0] and b"#FF00FF" not in calls[0]
+        assert b"Use ONLY a perfectly uniform" not in calls[0]
     else:
         assert b"Do not extract artwork" in calls[0]
         assert b"#00FF00" not in calls[0]
+    assert "User instruction: 保留原文字".encode() in calls[0]
+    assert b'name="quality"\r\n\r\nhigh' in calls[0]
+    assert b'name="output_format"\r\n\r\npng' in calls[0]
     async with asset_context.database.session_factory() as session:
         job = await session.get(ImageJob, job_id)
         balance = await session.scalar(
@@ -157,14 +232,14 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
             output = await session.get(Asset, job.output_asset_id)
             assert output.status == "ready" and output.parent_asset_id == uuid.UUID(source["id"])
             assert balance == 200 - quote_response.json()["quote"]["final_points"]
-            with Image.open(
-                BytesIO(await asset_context.storage.get_object(output.object_key))
-            ) as image:
+            with (
+                Image.open(BytesIO(raw)) as original,
+                Image.open(
+                    BytesIO(await asset_context.storage.get_object(output.object_key))
+                ) as image,
+            ):
+                np.testing.assert_array_equal(np.array(image), np.array(original))
                 assert image.getpixel((1, 1))[3] == (0 if operation == "ai.extract_print" else 255)
-                if native:
-                    red, green, blue, alpha = image.getpixel((29, 40))
-                    assert min(red, green, blue) >= 253
-                    assert alpha == 128
         else:
             assert job.status == "failed" and job.refund_status == "refunded"
             assert job.output_asset_id is None and balance == 200
