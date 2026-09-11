@@ -2,6 +2,7 @@ import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "rea
 import { ArrowDown, ArrowUp, FlaskConical, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
 import { apiRequest, jsonObject, objectValue, type AdminRow as Row } from "./admin-api";
 import { ToastMessage } from "./Toast";
+import { BusyDialog } from "./BusyDialog";
 
 export type EditorKind = "settings" | "pricing" | "memberships" | "points" | "roles" | "users" | "user-membership" | "user-roles";
 interface EditorProps {
@@ -97,7 +98,7 @@ const CONFIG_FIELDS: Record<string, FieldDefinition[]> = {
     { key: "max_upload_mb", label: "上传大小上限（MB）", type: "number", min: 1, max: 100 },
     { key: "max_image_megapixels", label: "图片像素上限（百万像素）", type: "number", min: 1, max: 200 },
     { key: "signed_url_ttl_seconds", label: "下载链接有效期（秒）", type: "number", min: 300, max: 900 },
-    { key: "task_concurrency", label: "任务并发上限", type: "number", min: 1, max: 64 },
+    { key: "task_concurrency", label: "任务并发上限", type: "number", min: 1, max: 64, hint: "全站运行及排队任务总量上限。实际同时处理数由服务器 WORKER_MAX_JOBS 决定（默认 2）；此处可适当提高以容纳排队任务，单用户仍受会员并发限制。" },
   ],
 };
 const SECRET_FIELDS: Record<string, Array<[string, string]>> = {
@@ -110,7 +111,7 @@ const SECRET_FIELDS: Record<string, Array<[string, string]>> = {
 function SiteImageUpload({ label, url, onUploaded }: { label: string; url: string; onUploaded: (url: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  return <div className="admin-brand-upload"><img src={url} alt={`${label}预览`} loading="lazy" /><label>{busy ? "上传中…" : `上传${label}`}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => {
+  return <div className="admin-brand-upload"><BusyDialog title={busy ? `正在上传${label}` : null} detail="正在保存配图，完成后此窗口会自动关闭。" /><img src={url} alt={`${label}预览`} loading="lazy" /><label>{busy ? "上传中…" : `上传${label}`}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => {
     const file = event.target.files?.[0]; if (!file) return;
     event.target.value = ""; setBusy(true); setError("");
     const body = new FormData(); body.append("image", file);

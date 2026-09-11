@@ -8,7 +8,7 @@
 .user-brand strong, .admin-brand span strong { overflow-wrap: anywhere; }
 .user-brand img, .admin-brand-mark { object-fit: contain; }
 .user-pagination { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-top: 22px; font-size: 12px; color: var(--user-muted); }
-.user-pagination label { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.user-pagination label { display: flex; align-items: center; gap: 8px; }
 .user-pagination select { border: 1px solid var(--user-line); border-radius: 8px; padding: 8px; background: var(--user-paper); color: var(--user-ink); }
 .user-pagination button { min-height: 36px; }
 .user-job-thumbnail { width: 50px; height: 50px; flex: 0 0 50px; overflow: hidden; border-radius: 9px; border: 1px solid var(--user-line); background: var(--user-surface); display: grid; place-items: center; }
@@ -44,7 +44,7 @@
   .user-creative-hero > div:first-child { width: 100%; }
   .user-creative-hero h2 { font-size: 27px; }
   .user-job-thumbnail { width: 42px; height: 42px; flex-basis: 42px; }
-  .user-pagination { gap: 8px; justify-content: center; }
+  .user-pagination { gap: 8px; justify-content: flex-end; }
   .user-pagination label { margin-right: 0; }
   .user-stage-progress { margin-inline: 10px; }
   .admin-brand-uploads { grid-template-columns: 1fr; }

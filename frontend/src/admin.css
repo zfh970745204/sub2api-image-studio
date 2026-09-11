@@ -452,7 +452,7 @@ body:has(.admin-boot) {
 .delta-down { color: var(--admin-red); }
 .admin-table-empty { min-height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8a9491; }
 .admin-table-empty strong { color: #68736f; font-size: 12px; font-weight: 600; }
-.admin-pagination { min-height: 49px; display: flex; align-items: center; justify-content: space-between; padding: 7px 12px; border-top: 1px solid var(--admin-line); color: var(--admin-muted); font-size: 10px; }
+.admin-pagination { min-height: 49px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: flex-end; padding: 7px 12px; border-top: 1px solid var(--admin-line); color: var(--admin-muted); font-size: 10px; }
 .admin-pagination > div { display: flex; gap: 5px; }
 .admin-table-skeleton { padding: 8px 12px; }
 .admin-table-skeleton span { height: 39px; display: block; margin: 4px 0; border-radius: 4px; background: #edf0ef; animation: admin-pulse 1.25s ease-in-out infinite; }

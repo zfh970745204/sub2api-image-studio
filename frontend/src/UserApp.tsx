@@ -3,7 +3,9 @@ import { useSiteBranding } from "./SiteBranding";
 import { Pagination, useCursorPage } from "./Pagination";
 import { ImageThumbnail } from "./ImageThumbnail";
 import { JobProgress } from "./JobProgress";
-import { estimatedPoints, jobOutputIds, downloadJob } from "./user-api";
+import { estimatedPoints, jobOutputIds, downloadJob, uploadAssets } from "./user-api";
+import { BusyDialog } from "./BusyDialog";
+import { usePageVisible } from "./usePageVisible";
 import {
   AlertCircle,
   ArrowRight,
@@ -756,6 +758,8 @@ function StudioPage({
   const bootstrapRef = useRef(bootstrap);
   bootstrapRef.current = bootstrap;
   const [busyState, setBusy] = useState<"loading" | "upload" | "quote" | "submit" | "mask" | null>("loading");
+  const [uploadDetail, setUploadDetail] = useState("");
+  const pageVisible = usePageVisible();
   const [restoringJob, setRestoringJob] = useState(Boolean(initialJob));
   const busy = restoringJob ? "loading" : busyState;
   const [error, setError] = useState("");
@@ -887,7 +891,7 @@ function StudioPage({
   }, [displayAsset?.id]);
 
   useEffect(() => {
-    if (!activeJob) return;
+    if (!activeJob || !pageVisible) return;
     const jobId = activeJob.id;
     let cancelled = false;
     let timer: number;
@@ -925,7 +929,7 @@ function StudioPage({
     }
     void poll();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [activeJob?.id]);
+  }, [activeJob?.id, pageVisible]);
 
   function parameters(): Record<string, unknown> {
     if (isGeneration) {
@@ -951,6 +955,7 @@ function StudioPage({
       return;
     }
     setBusy("upload");
+    setUploadDetail(`${file.name} · 正在上传并保存到素材库`);
     setError("");
     try {
       const payload = await api.uploadAsset(file);
@@ -976,19 +981,23 @@ function StudioPage({
     if (referenceIds.length + files.length > 6) { setError("最多添加 6 张参考图，可先移除不需要的图片。"); return; }
     if (files.some((file) => file.size > bootstrap.membership.entitlements.max_upload_mb * 1024 * 1024)) { setError("参考图超过会员上传大小限制。"); return; }
     setBusy("upload"); setError("");
-    const uploaded: Asset[] = [];
+    setUploadDetail(`已完成 0 / ${files.length} 张 · 正在上传并保存参考图`);
     try {
-      for (const file of files) uploaded.push((await api.uploadAsset(file)).asset);
-    } catch (reason) { setError(messageOf(reason, "部分图片上传失败，已上传的图片仍保留。")); }
-    finally {
+      const results = await uploadAssets(files, (completed) => setUploadDetail(`已处理 ${completed} / ${files.length} 张 · 正在保存参考图`));
+      const uploaded = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      const failed = results.find((result) => result.status === "rejected");
       setAssets((current) => [...uploaded, ...current]);
       if (uploaded.length) changeReferences([...referenceIds, ...uploaded.map((asset) => asset.id)]);
+      if (failed?.status === "rejected") setError(`已上传 ${uploaded.length} / ${files.length} 张，失败的图片可重新选择上传。${messageOf(failed.reason, "上传失败")}`);
+      else setNotice(`${uploaded.length} 张参考图已上传。`);
+    } catch (reason) { setError(messageOf(reason, "参考图上传失败")); }
+    finally {
       setBusy(null); if (uploadRef.current) uploadRef.current.value = "";
     }
   }
 
   async function uploadMask(file?: File) {
-    if (!file) return;
+    if (!file || busy || jobRunning) return;
     setBusy("mask");
     setError("");
     try {
@@ -1091,6 +1100,7 @@ function StudioPage({
   if (!canCreate) return <ForbiddenState title="无权创建图片任务" description="当前账号缺少工作台或任务创建权限。" />;
   return (
     <div className={`user-studio-page${expanded ? " preview-expanded" : ""}`}>
+      <BusyDialog title={busy === "upload" ? "正在上传图片" : busy === "mask" ? "正在上传遮罩" : busy === "quote" ? "正在准备任务" : downloadingBatch ? "正在打包下载" : null} detail={busy === "upload" ? uploadDetail : busy === "mask" ? "正在保存遮罩并核对图片尺寸" : busy === "quote" ? "正在准备素材并核算本次积分" : "正在整理整组图片，准备完成后自动开始下载"} />
       <PageHeader eyebrow="IMAGE STUDIO" title="图片编辑器" description="选择工具，上传图片，细节交给我们。">
         <button className="user-secondary" onClick={() => navigate("/app/jobs")} type="button"><ListTodo size={17} />任务中心</button>
       </PageHeader>
@@ -1285,16 +1295,17 @@ function AssetLineageDrawer({ items, onClose }: { items: Asset[]; onClose: () =>
 }
 
 function JobsPage() {
+  const pageVisible = usePageVisible();
   const [status, setStatus] = useState("");
   const pager = useCursorPage(status, (cursor, limit) => api.jobs(status, { cursor, limit }));
   const { items, setItems, error, setError, load } = pager;
   const [selected, setSelected] = useState<ImageJob | null>(null);
 
   useEffect(() => {
-    if (!items?.some((item) => ["queued", "running", "retry_wait"].includes(item.status))) return;
+    if (!pageVisible || !items?.some((item) => ["queued", "running", "retry_wait"].includes(item.status))) return;
     const timer = window.setInterval(() => void load(true), 4000);
     return () => window.clearInterval(timer);
-  }, [items, load]);
+  }, [items, load, pageVisible]);
 
   async function cancel(job: ImageJob) {
     try {
@@ -1337,17 +1348,28 @@ function JobsPage() {
 
 function JobDrawer({ job: initialJob, onCancel, onClose }: { job: ImageJob; onCancel: (job: ImageJob) => Promise<void>; onClose: () => void }) {
   const [job, setJob] = useState(initialJob);
+  const pageVisible = usePageVisible();
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState("");
   useEffect(() => setJob(initialJob), [initialJob]);
   useEffect(() => {
-    if (!["queued", "running", "retry_wait"].includes(job.status)) return;
+    if (!pageVisible || !["queued", "running", "retry_wait"].includes(job.status)) return;
     let active = true;
-    const timer = window.setInterval(() => { void api.job(initialJob.id).then((value) => { if (active) setJob(value.job); }).catch(() => undefined); }, 2500);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [initialJob.id, job.status]);
+    let timer: number;
+    async function poll() {
+      try { const value = await api.job(initialJob.id); if (active) setJob(value.job); }
+      catch { /* The task list remains available; retry without stacking requests. */ }
+      finally { if (active) timer = window.setTimeout(poll, 2500); }
+    }
+    void poll();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [initialJob.id, job.status, pageVisible]);
   const failed = ["failed", "timed_out", "cancelled"].includes(job.status);
   const outputIds = jobOutputIds(job);
   return (
     <div className="user-drawer-layer">
+      <BusyDialog title={downloading ? "正在打包下载" : null} detail="正在整理整组图片，准备完成后自动开始下载" />
+      {error && <InlineMessage tone="error">{error}</InlineMessage>}
       <button aria-label="关闭任务详情" className="user-drawer-scrim" onClick={onClose} type="button" />
       <aside className="user-drawer" aria-label="任务详情">
         <header><span><small>任务详情</small><strong>{operationName(job.operation_code)}</strong></span><button aria-label="关闭" onClick={onClose} title="关闭" type="button"><X size={19} /></button></header>
@@ -1359,7 +1381,7 @@ function JobDrawer({ job: initialJob, onCancel, onClose }: { job: ImageJob; onCa
         {failed && <div className="user-failure-box"><AlertCircle size={18} /><span><strong>{job.error_message || (job.status === "cancelled" ? "任务已由你取消" : "图片处理未能完成")}</strong><small>{job.refund_status === "refunded" ? "本次消耗积分已自动退回。" : "系统正在核对退款状态。"}</small></span></div>}
         {job.status === "queued" && <button className="user-danger-button" onClick={() => void onCancel(job)} type="button"><XCircle size={17} />取消任务并退款</button>}
         {failed && job.source_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><RefreshCw size={17} />使用原素材重试</button>}
-        {job.status === "succeeded" && outputIds[0] && <><button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><ImagePlus size={17} />{job.source_asset_id ? "在编辑器中查看前后对比" : "在编辑器中打开结果"}</button>{outputIds.length > 1 && <button className="user-secondary" onClick={() => void downloadJob(job.id)} type="button"><Download size={16} />下载整组结果</button>}</>}
+        {job.status === "succeeded" && outputIds[0] && <><button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><ImagePlus size={17} />{job.source_asset_id ? "在编辑器中查看前后对比" : "在编辑器中打开结果"}</button>{outputIds.length > 1 && <button className="user-secondary" disabled={downloading} onClick={async () => { setDownloading(true); setError(""); try { await downloadJob(job.id); } catch (reason) { setError(messageOf(reason, "打包下载失败")); } finally { setDownloading(false); } }} type="button"><Download size={16} />下载整组结果</button>}</>}
       </aside>
     </div>
   );

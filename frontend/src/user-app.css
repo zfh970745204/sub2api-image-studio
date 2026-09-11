@@ -672,7 +672,7 @@ body:has(.user-full-state) {
 .user-compact-list > button {
   min-height: 68px;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto 18px;
+  grid-template-columns: auto minmax(0, 1fr) auto 18px;
   align-items: center;
   gap: 11px;
   padding: 10px 16px;
@@ -700,6 +700,12 @@ body:has(.user-full-state) {
 .user-compact-list small {
   color: var(--user-muted);
   font-size: 12px;
+}
+
+.user-compact-list > button > span:nth-child(2) > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-operation-icon {

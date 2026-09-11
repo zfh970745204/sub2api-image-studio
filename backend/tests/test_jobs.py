@@ -544,6 +544,90 @@ async def test_concurrency_limit_owner_isolation_cancel_and_expired_quote(
 
 
 @pytest.mark.asyncio
+async def test_different_users_execute_together_without_duplicate_charges_or_results(
+    job_context: JobContext,
+) -> None:
+    users = [await seed_user(job_context, email=f"parallel-{i}@example.com") for i in range(2)]
+    job_ids = []
+    for user in users:
+        async with client_for(job_context, user_agent=str(user.id)) as client:
+            await login(client, user.email)
+            created = await create_job(client, await quote(client, "ai.generate"), key=str(user.id))
+            assert created.status_code == 201, created.text
+            job_ids.append(created.json()["job"]["id"])
+
+    entered = set()
+    both_running = asyncio.Event()
+    release = asyncio.Event()
+
+    async def executor(claim):
+        entered.add(claim.user_id)
+        if len(entered) == 2:
+            both_running.set()
+        await release.wait()
+        asset_id = uuid7()
+        async with job_context.database.session_factory() as session:
+            session.add(
+                Asset(
+                    id=asset_id,
+                    owner_id=claim.user_id,
+                    root_asset_id=asset_id,
+                    source_job_id=claim.job_id,
+                    kind="result",
+                    operation_code="ai.generate",
+                    bucket="test",
+                    object_key=f"test/{asset_id}.png",
+                    mime_type="image/png",
+                    extension="png",
+                    size_bytes=1,
+                    sha256="0" * 64,
+                    status="ready",
+                )
+            )
+            await session.commit()
+        return {"output_asset_id": str(asset_id)}
+
+    ctx = {
+        "runtime": type(
+            "Runtime",
+            (),
+            {
+                "database": job_context.database,
+                "instance_name": "parallel-worker",
+            },
+        )(),
+        "image_job_executor": executor,
+    }
+    tasks = [asyncio.create_task(execute_image_job(ctx, job_id)) for job_id in job_ids]
+    try:
+        # Neither user's upstream call has finished when both are executing.
+        await asyncio.wait_for(both_running.wait(), timeout=5)
+        duplicate = await execute_image_job(ctx, job_ids[0])
+        assert duplicate["status"] == "ignored"
+    finally:
+        release.set()
+        results = await asyncio.gather(*tasks)
+    assert [result["status"] for result in results] == ["succeeded", "succeeded"]
+    async with job_context.database.session_factory() as session:
+        for job_id, user in zip(job_ids, users, strict=True):
+            job = await session.get(ImageJob, uuid.UUID(job_id))
+            asset = await session.get(Asset, job.output_asset_id)
+            assert asset.owner_id == job.user_id == user.id
+            assert asset.source_job_id == job.id
+            assert job.attempt_count == 1
+            assert (
+                await session.scalar(
+                    select(func.count(PointTransaction.id)).where(
+                        PointTransaction.user_id == user.id,
+                        PointTransaction.entry_type == "consume",
+                    )
+                )
+                == 1
+            )
+        assert list(await session.scalars(select(PointAccount.balance))) == [180, 180]
+
+
+@pytest.mark.asyncio
 async def test_worker_retry_success_timeout_refund_and_late_result_rejection(
     job_context: JobContext,
 ) -> None:

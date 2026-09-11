@@ -9,8 +9,8 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from .api.admin import router as admin_router_v1
 from .api.admin_users import router as admin_users_router
@@ -28,6 +28,7 @@ from .api.security import router as security_router
 from .api.site import router as site_router
 from .api.system import admin_router, public_router, v1_router
 from .config import get_settings
+from .frontend import FrontendStaticFiles
 from .image_ops import (
     ImageInputError,
     inspect_image,
@@ -99,6 +100,7 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
 )
 app.add_middleware(RequestContextMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 app.include_router(public_router)
 app.include_router(v1_router)
 app.include_router(admin_router)
@@ -390,11 +392,11 @@ if frontend_dist.is_dir():
     @app.get("/app", include_in_schema=False)
     @app.get("/app/{path:path}", include_in_schema=False)
     async def user_frontend(path: str = "") -> FileResponse:
-        return FileResponse(frontend_dist / "index.html")
+        return FileResponse(frontend_dist / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/admin", include_in_schema=False)
     @app.get("/admin/{path:path}", include_in_schema=False)
     async def admin_frontend(path: str = "") -> FileResponse:
-        return FileResponse(frontend_dist / "index.html")
+        return FileResponse(frontend_dist / "index.html", headers={"Cache-Control": "no-cache"})
 
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    app.mount("/", FrontendStaticFiles(directory=frontend_dist, html=True), name="frontend")

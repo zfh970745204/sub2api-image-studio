@@ -61,6 +61,7 @@ def test_user_spa_routes_support_direct_navigation() -> None:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
         assert '<div id="root"></div>' in response.text
+        assert response.headers["cache-control"] == "no-cache"
 
 
 def test_model_connection_error_is_public(monkeypatch) -> None:

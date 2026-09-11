@@ -129,6 +129,20 @@ describe("Studio task workflow", () => {
     expect(screen.queryByRole("button", { name: "上传图片" })).not.toBeInTheDocument();
   });
 
+  it("pauses task polling in a hidden tab and resumes when returning", async () => {
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const dialog = await prepare();
+    vi.useFakeTimers();
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" })); });
+    expect(events).toHaveBeenCalledTimes(1);
+    act(() => { visibility = "hidden"; document.dispatchEvent(new Event("visibilitychange")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(events).toHaveBeenCalledTimes(1);
+    await act(async () => { visibility = "visible"; document.dispatchEvent(new Event("visibilitychange")); });
+    expect(events).toHaveBeenCalledTimes(2);
+  });
+
   it("restores the running task with its original tool, input and source after reload", async () => {
     restoredJob = { ...job, operation_code: "ai.redraw", source_asset_id: result.id, parameters: { instruction: "保留原来的字体", quality: "medium" } };
     events.mockImplementation(() => Promise.resolve(response({ job: restoredJob, next_poll_after_ms: 2000 })));

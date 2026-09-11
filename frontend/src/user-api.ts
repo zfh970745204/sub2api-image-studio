@@ -348,3 +348,20 @@ export const api = {
   membership: () => request<{ membership: BootstrapData["membership"] }>("/api/v1/membership/me"),
   membershipPlans: () => request<{ items: MembershipPlan[] }>("/api/v1/membership/plans"),
 };
+
+/** Limit bandwidth pressure while keeping input order and each successful upload. */
+export async function uploadAssets(files: File[], onSettled: (completed: number) => void) {
+  const results: PromiseSettledResult<Asset>[] = new Array(files.length);
+  let next = 0;
+  let completed = 0;
+  async function worker() {
+    while (next < files.length) {
+      const index = next++;
+      try { results[index] = { status: "fulfilled", value: (await api.uploadAsset(files[index])).asset }; }
+      catch (reason) { results[index] = { status: "rejected", reason }; }
+      onSettled(++completed);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, files.length) }, () => worker()));
+  return results;
+}

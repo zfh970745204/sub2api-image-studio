@@ -1,0 +1,14 @@
+.studio-boot-loading { min-height: 100dvh; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--studio-muted); background: var(--studio-surface); font: 14px system-ui, sans-serif; }
+.studio-boot-loading > span { width: 20px; height: 20px; border: 2px solid var(--studio-line); border-top-color: var(--studio-accent); border-radius: 50%; animation: studio-busy-spin 1s linear infinite; }
+.studio-busy-dialog { box-sizing: border-box; width: min(400px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); position: fixed; inset: 0; margin: auto; padding: 28px; overflow: auto; color: var(--studio-ink); border: 1px solid var(--studio-line); border-radius: 16px; background: var(--studio-paper); box-shadow: 0 24px 80px #17223d24; text-align: center; font-family: inherit; }
+.studio-busy-dialog::backdrop { background: #17223d55; }
+.studio-busy-icon { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 16px; color: var(--studio-accent); border-radius: 15px; background: var(--studio-accent-soft); }
+.studio-busy-icon svg { animation: studio-busy-spin 1.1s linear infinite; }
+.studio-busy-dialog h2 { margin: 0 0 8px; font-size: 18px; font-weight: 650; }
+.studio-busy-dialog p { min-height: 40px; margin: 0; color: var(--studio-muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.studio-busy-dialog small { display: block; color: var(--studio-muted); font-size: 11px; line-height: 1.6; }
+.studio-busy-track { height: 4px; margin: 20px 0 12px; overflow: hidden; border-radius: 4px; background: var(--studio-accent-soft); }
+.studio-busy-track span { display: block; width: 35%; height: 100%; border-radius: inherit; background: var(--studio-accent); animation: studio-busy-slide 1.5s ease-in-out infinite; }
+@keyframes studio-busy-spin { to { transform: rotate(360deg); } }
+@keyframes studio-busy-slide { from { transform: translateX(-100%); } to { transform: translateX(390%); } }
+@media (prefers-reduced-motion: reduce) { .studio-busy-icon svg, .studio-boot-loading > span, .studio-busy-track span { animation: none; } }

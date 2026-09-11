@@ -71,8 +71,8 @@ body { background: #f2f3f5; }
 .user-canvas-column { background: #fff; }
 .studio-preview-viewport { background-color: #f5f6f8; }
 .user-version-strip { border-color: #e1e4e8; }
-.user-pagination { min-height: 48px; display: grid; grid-template-columns: minmax(150px, 1fr) auto minmax(64px, 1fr); align-items: center; gap: 16px; width: 100%; margin-top: 18px; padding: 8px 2px; }
-.user-pagination label { justify-self: start; margin: 0; }
+.user-pagination { min-height: 48px; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px 16px; width: 100%; margin-top: 18px; padding: 8px 2px; }
+.user-pagination label { margin: 0; white-space: nowrap; }
 .user-pagination .pagination-navigation { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .user-pagination .pagination-navigation > span { min-width: 62px; text-align: center; color: #656c76; }
 .user-pagination .pagination-navigation > span { color: #1b1e23; font-weight: 650; }
@@ -125,10 +125,8 @@ body { background: #f2f3f5; }
 .landing-visual-note { color: #7e8792; }
 
 @media (max-width: 760px) {
-  .user-pagination { grid-template-columns: 1fr 1fr; gap: 7px 10px; padding-top: 4px; }
-  .user-pagination label { grid-column: 1 / -1; justify-self: stretch; justify-content: space-between; }
-  .user-pagination .pagination-navigation { justify-self: start; }
-  .user-pagination .pagination-refresh { justify-self: end; }
+  .user-pagination { gap: 7px 10px; padding-top: 4px; }
+  .user-pagination label { flex-basis: 100%; justify-content: flex-end; }
   .studio-result-gallery > div { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .user-job-output-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .user-creative-hero > div:first-child { width: 100%; }

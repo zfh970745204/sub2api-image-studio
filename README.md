@@ -110,7 +110,7 @@ administrator after the first `super_admin` exists.
 For a memory-constrained server that uses Neon PostgreSQL, Cloudflare R2, and an
 existing host Nginx, use `docker-compose.server.yml` instead. Its application image
 is published to GHCR only after the `main` quality workflow succeeds. It starts only
-Web, a single-concurrency Worker, Scheduler, and a memory-limited Redis; FastAPI is
+Web, a configurable concurrent Worker, Scheduler, and a memory-limited Redis; FastAPI is
 bound to `127.0.0.1:18080` for the host reverse proxy. See
 `docs/productization/13-迁移部署与上线运维.md` for the production sequence.
 
