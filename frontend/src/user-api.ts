@@ -60,6 +60,7 @@ export interface UserPreferences {
     panel_width?: number;
     canvas_fit?: "contain" | "actual";
     last_tool?: string;
+    print_output_mode?: "transparent" | "opaque";
   };
   notification_preferences: Record<string, boolean>;
   updated_at: string;
@@ -319,6 +320,8 @@ export const api = {
       `/api/v1/assets?${pageQuery({ ...page, kind })}`,
     ),
   asset: (id: string) => request<{ asset: Asset }>(`/api/v1/assets/${id}`),
+  printBackground: (id: string, point?: { x: number; y: number }) =>
+    request<{ color: string; confidence: number; method: string }>(`/api/v1/assets/${id}/print-background${point ? `?x=${point.x}&y=${point.y}` : ""}`),
   lineage: (id: string) => request<{ items: Asset[] }>(`/api/v1/assets/${id}/lineage`),
   uploadAsset: (file: File, kind = "original") => {
     const body = new FormData();

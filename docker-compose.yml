@@ -28,6 +28,8 @@ x-app-environment: &app-environment
   RESULT_DIR: /tmp/sub2image-results
   DATABASE_PATH: /tmp/legacy-studio.db
   BACKGROUND_MODEL_DIR: /models
+  U2NET_HOME: /models
+  NUMBA_CACHE_DIR: /app/backend/data/cache/numba
 
 x-app-service: &app-service
   build: .

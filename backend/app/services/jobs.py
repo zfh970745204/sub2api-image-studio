@@ -1214,6 +1214,13 @@ class JobService:
     @staticmethod
     async def _validate_generation(session, code, parameters, source_id, user_id) -> int:
         from app.domain.jobs import ECOMMERCE_PLATFORMS
+        from app.domain.print_extraction import print_options
+
+        if code == "ai.extract_print":
+            try:
+                print_options(parameters)
+            except ValueError as exc:
+                raise ApiError(422, "INVALID_OPERATION_PARAMETERS", str(exc)) from exc
 
         if code not in {"ai.generate", "ai.ecommerce"}:
             if parameters.get("reference_asset_ids") or parameters.get("image_count", 1) != 1:

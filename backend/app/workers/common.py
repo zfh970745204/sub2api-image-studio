@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from app.config import get_settings
+from app.services.image_runtime import warmup_image_runtime
 from app.services.logging import configure_logging
 from app.services.runtime import RuntimeServices
 
@@ -11,6 +12,8 @@ from app.services.runtime import RuntimeServices
 async def startup_service(ctx: dict[str, Any], service_type: str) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    if service_type == "worker":
+        await asyncio.to_thread(warmup_image_runtime, settings)
     runtime = RuntimeServices(settings)
     ctx["settings"] = settings
     ctx["runtime"] = runtime

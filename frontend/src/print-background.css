@@ -1,0 +1,9 @@
+.print-background-controls { display: grid; gap: 10px; }
+.print-background-controls small, .print-color-sample p { color: var(--muted, #667085); font-size: 12px; line-height: 1.6; }
+.print-color-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.print-color-actions button { flex: 1; justify-content: center; }
+.print-color-sample { display: grid; gap: 8px; }
+.print-color-sample p { margin: 0; }
+.print-color-sample > button { display: block; width: 160px; max-width: 100%; padding: 0; border: 0; cursor: crosshair; background: transparent; }
+.print-color-sample img { display: block; width: 100%; height: auto; }
+.print-quote-color { display: inline-block; width: 12px; height: 12px; border: 1px solid #ccd0d8; border-radius: 3px; margin-right: 6px; vertical-align: middle; }

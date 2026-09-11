@@ -4,11 +4,16 @@ import importlib.util
 import math
 from functools import lru_cache
 from io import BytesIO
+from threading import RLock
 from typing import Any
 
 import cv2
 import numpy as np
 from PIL import Image, ImageColor, ImageFilter, ImageOps, UnidentifiedImageError
+
+from .services.image_runtime import configure_image_runtime
+
+_background_lock = RLock()
 
 
 class ImageInputError(ValueError):
@@ -77,6 +82,7 @@ def _background_session(model_name: str):
 
 
 def remove_background(raw_png: bytes, model_name: str) -> bytes:
+    configure_image_runtime()
     try:
         from rembg import remove
     except ImportError as exc:
@@ -85,7 +91,9 @@ def remove_background(raw_png: bytes, model_name: str) -> bytes:
         raise RuntimeError("The ONNX background removal runtime could not be loaded.") from exc
 
     try:
-        result = remove(raw_png, session=_background_session(model_name))
+        with _background_lock:
+            session = _background_session(model_name)
+        result = remove(raw_png, session=session)
     except SystemExit as exc:
         raise RuntimeError("The ONNX background removal runtime could not be loaded.") from exc
     if not isinstance(result, bytes):

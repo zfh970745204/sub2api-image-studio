@@ -146,11 +146,18 @@ async def test_preferences_are_merged_and_reject_untrusted_layout_fields(
         }
 
         merged = await client.patch(
-            "/api/v1/me/preferences", json={"studio_layout": {"nav_collapsed": True}}
+            "/api/v1/me/preferences",
+            json={"studio_layout": {"nav_collapsed": True, "print_output_mode": "opaque"}},
         )
         assert merged.status_code == 200
         assert merged.json()["preferences"]["studio_layout"]["asset_view"] == "list"
         assert merged.json()["preferences"]["studio_layout"]["nav_collapsed"] is True
+        assert merged.json()["preferences"]["studio_layout"]["print_output_mode"] == "opaque"
+        assert (
+            await client.patch(
+                "/api/v1/me/preferences", json={"studio_layout": {"print_output_mode": "fake"}}
+            )
+        ).status_code == 422
 
         unsafe = await client.patch(
             "/api/v1/me/preferences",

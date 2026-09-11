@@ -12,10 +12,10 @@ from sqlalchemy import update
 
 from app.api.errors import ApiError
 from app.config import Settings
+from app.domain.print_extraction import print_options
 from app.image_ops import (
     ImageInputError,
     apply_color_effect,
-    finalize_print_extraction,
     has_chroma_key_background,
     remove_background,
     remove_solid_background,
@@ -24,6 +24,7 @@ from app.image_ops import (
     vectorize_artwork,
 )
 from app.object_storage import ObjectStorage, ObjectStorageError
+from app.print_extraction import extract_prompt, finish_print, product_background
 from app.repositories.models import ImageJob
 from app.services.asset_files import AssetInputError, prepare_asset
 from app.services.assets import AssetService
@@ -37,12 +38,7 @@ from app.sub2api import Sub2APIClient, Sub2APIError
 
 AI_EDIT_PROMPTS = {
     "ai.extract_print": (
-        "提取参考图片中的完整印花图案，只要印花，保持原有的色彩和内容不变。"
-        "保留全部文字、字体、排版、比例和细节，包括白色与黑色印花。"
-        "去掉衣服、杯子等产品本体及其背景，校正褶皱和透视，得到平整、清晰的独立图案。"
-        "直接输出透明背景 PNG，背景区域的 Alpha 为 0，不要把棋盘格画进图片。"
-        "保留发丝、细线、烟雾等自然的半透明边缘，不要添加色边、阴影或描边。"
-        "完整图案居中，四周留少量透明边距，不裁掉任何设计。"
+        "Extract the print against its product color; the prompt is resolved at execution."
     ),
     "ai.redraw": (
         "Faithfully restore the complete source image at high resolution. Recover natural edges, "
@@ -305,7 +301,14 @@ class ImageJobExecutor:
                 parameters.get("instruction") or parameters.get("prompt") or ""
             ).strip()
             prompt = AI_EDIT_PROMPTS[operation]
-            if instruction:
+            if operation == "ai.extract_print":
+                output_mode, background_color = print_options(parameters)
+                if background_color is None:
+                    # Compatibility for jobs created before the color selector.
+                    estimated = await asyncio.to_thread(product_background, source)
+                    background_color = estimated["color"]
+                prompt = extract_prompt(background_color, instruction)
+            elif instruction:
                 prompt = f"{prompt}\nUser instruction: {instruction}"
             mask = await self._mask_data(claim)
             if operation in {"ai.repair", "ai.text_fix"} and mask is None:
@@ -333,7 +336,7 @@ class ImageJobExecutor:
             await self._progress(claim, 65)
             if operation == "ai.extract_print":
                 output, metadata = await asyncio.to_thread(
-                    finalize_print_extraction, upstream.data, require_native_alpha=True
+                    finish_print, upstream.data, mode=output_mode, color=background_color
                 )
                 return (
                     output,
@@ -342,7 +345,7 @@ class ImageJobExecutor:
                     {
                         **metadata,
                         "revised_prompt": upstream.revised_prompt,
-                        "workflow": "direct-transparent-print-extraction",
+                        "workflow": "product-color-print-extraction",
                     },
                 )
             return (

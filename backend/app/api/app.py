@@ -36,6 +36,7 @@ STUDIO_LAYOUT_RULES: dict[str, tuple[type, set[Any] | tuple[int, int] | None]] =
     "panel_position": (str, {"right", "bottom"}),
     "panel_width": (int, (280, 480)),
     "canvas_fit": (str, {"contain", "actual"}),
+    "print_output_mode": (str, {"transparent", "opaque"}),
     "last_tool": (
         str,
         {

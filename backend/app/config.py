@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     result_dir: Path = PROJECT_ROOT / "backend" / "data" / "results"
     database_path: Path = PROJECT_ROOT / "backend" / "data" / "studio.db"
     background_model_dir: Path = PROJECT_ROOT / "backend" / "data" / "models"
+    numba_cache_dir: Path = PROJECT_ROOT / "backend" / "data" / "cache" / "numba"
 
     @property
     def sub2api_configured(self) -> bool:

@@ -140,24 +140,28 @@ def test_direct_extraction_rejects_painted_checkerboard_and_empty_alpha():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "operation,result_kind,valid",
+    "operation,result_kind,valid,mode",
     [
-        ("ai.extract_print", "native", True),
-        ("ai.extract_print", "green", False),
-        ("ai.extract_print", "magenta", False),
-        ("ai.extract_print", "opaque", False),
-        ("ai.extract_print", "empty", False),
-        ("ai.redraw", "opaque", True),
+        ("ai.extract_print", "native", True, "transparent"),
+        ("ai.extract_print", "native", True, "opaque"),
+        ("ai.extract_print", "green", False, "transparent"),
+        ("ai.extract_print", "magenta", False, "transparent"),
+        ("ai.extract_print", "opaque", True, "transparent"),
+        ("ai.extract_print", "opaque", True, "opaque"),
+        ("ai.extract_print", "empty", False, "transparent"),
+        ("ai.redraw", "opaque", True, "opaque"),
     ],
 )
 async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
-    asset_context, operation, result_kind, valid
+    asset_context, operation, result_kind, valid, mode
 ):
     owner = await seed_user(asset_context, email="print-owner@example.test")
     async with client_for(asset_context, "print-owner") as client:
         await login(client, owner.email)
         source = (await upload(client, raster_bytes())).json()["asset"]
         parameters = {"quality": "high", "instruction": "保留原文字"}
+        if operation == "ai.extract_print":
+            parameters.update(output_mode=mode, background_color="#FFFFFF")
         quote_response = await client.post(
             "/api/v1/jobs/quote",
             json={
@@ -213,7 +217,7 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
     assert len(calls) == 1
     if operation == "ai.extract_print":
         assert "保持原有的色彩和内容不变".encode() in calls[0]
-        assert "直接输出透明背景 PNG".encode() in calls[0]
+        assert "均匀纯色 #FFFFFF 背景".encode() in calls[0]
         assert b"#00FF00" not in calls[0] and b"#FF00FF" not in calls[0]
         assert b"Use ONLY a perfectly uniform" not in calls[0]
     else:
@@ -238,8 +242,19 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
                     BytesIO(await asset_context.storage.get_object(output.object_key))
                 ) as image,
             ):
-                np.testing.assert_array_equal(np.array(image), np.array(original))
-                assert image.getpixel((1, 1))[3] == (0 if operation == "ai.extract_print" else 255)
+                if operation == "ai.redraw" or (result_kind == "native" and mode == "transparent"):
+                    np.testing.assert_array_equal(np.array(image), np.array(original))
+                elif mode == "opaque":
+                    expected = Image.alpha_composite(
+                        Image.new("RGBA", original.size, "white"), original
+                    ).convert("RGB")
+                    np.testing.assert_array_equal(np.array(image), np.array(expected))
+                    assert image.mode == "RGB" and output.has_alpha is False
+                if operation == "ai.extract_print" and mode == "transparent":
+                    assert image.getpixel((1, 1))[3] == 0
         else:
             assert job.status == "failed" and job.refund_status == "refunded"
             assert job.output_asset_id is None and balance == 200
+    # Duplicate queue delivery never re-generates, charges or refunds twice.
+    await execute_image_job({"runtime": runtime, "image_job_executor": executor}, str(job_id))
+    assert len(calls) == 1

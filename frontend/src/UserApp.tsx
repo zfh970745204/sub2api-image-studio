@@ -6,6 +6,7 @@ import { JobProgress } from "./JobProgress";
 import { estimatedPoints, jobOutputIds, downloadJob, uploadAssets } from "./user-api";
 import { BusyDialog } from "./BusyDialog";
 import { usePageVisible } from "./usePageVisible";
+import { PrintBackgroundControls } from "./PrintBackgroundControls";
 import {
   AlertCircle,
   ArrowRight,
@@ -146,7 +147,7 @@ const OPERATION_META: Record<
   "ai.generate": { label: "AI 生成", description: "根据描述创建新图案", icon: Sparkles, source: false },
   "ai.ecommerce": { label: "电商主图", description: "一组产品，多张主图。参考产品外观，统一设计与色彩。", icon: Images, source: false },
   "ai.redraw": { label: "高清重绘", description: "保留内容并提升清晰度", icon: WandSparkles, source: true },
-  "ai.extract_print": { label: "印花提取", description: "从产品照片还原印花，保留设计与色彩，输出透明 PNG", icon: FileImage, source: true },
+  "ai.extract_print": { label: "印花提取", description: "从产品照片还原印花，保留设计与色彩，可选透明或原产品底色", icon: FileImage, source: true },
   "cutout.smart": { label: "智能抠图", description: "输出透明 PNG", icon: Scissors, source: true },
   "upscale.2x": { label: "2x 放大", description: "保真放大两倍", icon: Scaling, source: true },
   "upscale.4x": { label: "4x 放大", description: "保真放大四倍", icon: Scaling, source: true },
@@ -708,6 +709,7 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
 }
 
 interface StudioFormState {
+  printOutputMode: "transparent" | "opaque";
   platform: string;
   imageCount: number;
   prompt: string;
@@ -738,6 +740,7 @@ function StudioPage({
   const [downloadingBatch, setDownloadingBatch] = useState(false);
   const [maskId, setMaskId] = useState("");
   const [form, setForm] = useState<StudioFormState>({
+    printOutputMode: bootstrap.preferences.studio_layout.print_output_mode || "transparent",
     platform: "amazon",
     imageCount: 4,
     prompt: "",
@@ -747,6 +750,8 @@ function StudioPage({
     color: "#171c1b",
     maxColors: 6,
   });
+  const [printBackground, setPrintBackground] = useState({ sourceId: "", color: "" });
+  const productColor = printBackground.sourceId === sourceId ? printBackground.color : "";
   const [quote, setQuote] = useState<Quote | null>(null);
   const quoteParameters = useRef<Record<string, unknown>>({});
   const submitting = useRef(false);
@@ -825,6 +830,13 @@ function StudioPage({
   const jobRunning = Boolean(activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status));
   const selectableAssets = assets.filter((item) => item.status === "ready" && !["mask", "thumbnail", "vector"].includes(item.kind));
 
+  useEffect(() => {
+    if (operationCode === "ai.extract_print" && productColor) {
+      setPreviewMode("color");
+      setPreviewColor(productColor);
+    }
+  }, [operationCode, productColor]);
+
   function refreshBalance() {
     void api.pointBalance().then(({ account }) => onBootstrap({ ...bootstrapRef.current, points: account })).catch(() => undefined);
   }
@@ -850,12 +862,14 @@ function StudioPage({
         const refs = Array.isArray(job.parameters.reference_asset_ids) ? job.parameters.reference_asset_ids.map(String) : job.source_asset_id ? [job.source_asset_id] : [];
         setReferenceIds(refs);
         setSourceId(job.source_asset_id || refs[0] || "");
+        setPrintBackground({ sourceId: job.source_asset_id || "", color: typeof job.parameters.background_color === "string" ? job.parameters.background_color : "" });
         for (const id of refs.filter((id) => id !== job.source_asset_id)) {
           try { const { asset } = await api.asset(id); if (!cancelled) setAssets((current) => [asset, ...current.filter((item) => item.id !== id)]); }
           catch { if (!cancelled) setError("部分参考图已过期或被删除，重新提交前请替换。"); }
         }
         setForm((current) => ({
           ...current,
+          printOutputMode: job.parameters.output_mode === "opaque" ? "opaque" : "transparent",
           platform: String(job.parameters.platform || "amazon"),
           imageCount: Number(job.parameters.image_count || 4),
           prompt: String(job.parameters.prompt || job.parameters.instruction || ""),
@@ -935,7 +949,10 @@ function StudioPage({
     if (isGeneration) {
       return { prompt: form.prompt.trim(), size: form.size, quality: form.quality, output_format: "png", reference_asset_ids: referenceIds, ...(operationCode === "ai.ecommerce" ? { platform: form.platform, image_count: form.imageCount } : {}) };
     }
-    if (operationCode === "ai.redraw" || operationCode === "ai.variant" || operationCode === "ai.extract_print") {
+    if (operationCode === "ai.extract_print") {
+      return { instruction: form.prompt.trim(), size: "auto", quality: form.quality, output_mode: form.printOutputMode, background_color: productColor };
+    }
+    if (operationCode === "ai.redraw" || operationCode === "ai.variant") {
       return { instruction: form.prompt.trim(), size: "auto", quality: form.quality };
     }
     if (operationCode === "ai.repair" || operationCode === "ai.text_fix") {
@@ -1022,6 +1039,10 @@ function StudioPage({
     }
     if (meta.source && !sourceId) {
       setError("请先上传或选择一个来源素材。");
+      return;
+    }
+    if (operationCode === "ai.extract_print" && !/^#[0-9a-f]{6}$/i.test(productColor)) {
+      setError("请等待底色识别完成，或手动确认产品底色。");
       return;
     }
     if (operationCode === "ai.text_fix" && !form.prompt.trim()) {
@@ -1154,6 +1175,14 @@ function StudioPage({
             <div className="studio-source-picker"><label className="user-field"><span>来源素材</span><select onChange={(event) => { setSourceId(event.target.value); setResultAsset(null); }} value={sourceId}><option value="">从素材库选择</option>{selectableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></label><button className="user-secondary" aria-label={source ? "替换 / 上传图片" : "上传图片"} title={source ? "替换 / 上传图片" : "上传图片"} disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}</button></div>
           )}
           <input accept="image/png,image/jpeg,image/webp" hidden multiple={isGeneration} onChange={(event) => { if (isGeneration) void uploadReferences(Array.from(event.target.files || [])); else void upload(event.target.files?.[0]); }} ref={uploadRef} type="file" />
+          {operationCode === "ai.extract_print" && <>
+            <Segmented label="输出背景" value={form.printOutputMode} options={[["transparent", "透明背景"], ["opaque", "原产品底色（不透明）"]]} onChange={(value) => {
+              const mode = value === "opaque" ? "opaque" : "transparent";
+              setForm({ ...form, printOutputMode: mode }); setQuote(null);
+              void api.updatePreferences({ studio_layout: { print_output_mode: mode } }).then(({ preferences }) => onBootstrap({ ...bootstrapRef.current, preferences })).catch(() => undefined);
+            }} />
+            {sourceId && !restoringJob && <PrintBackgroundControls key={sourceId} sourceId={sourceId} sourceUrl={sourceUrl} color={productColor} onChange={(color) => { setPrintBackground({ sourceId, color }); setQuote(null); }} />}
+          </>}
           {(operationCode.startsWith("ai.") || operationCode === "ai.generate") && (
             <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={3} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
           )}
@@ -1162,7 +1191,7 @@ function StudioPage({
           {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
-          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>AI 直接提取产品上的完整印花，保留原设计、文字与色彩，输出透明 PNG，并保留发丝、细线等柔和边缘。适合衣服、杯子、帆布袋等产品照片；有多个图案时，可在补充要求中指定要提取的区域。建议上传清晰原图，复杂照片可先裁切到图案附近。</p></details>}
+          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>先确认衣服、杯子等产品的底色。透明背景会尽量去除外围底色，保留图案细节，建议在同色产品上使用；图案内部与底色相同的区域会保守保留。原产品底色模式保留平整底色，不保留产品外形、布料纹理和褶皱。两种模式均输出 PNG；有多个图案时，可在补充要求中指定提取区域。</p></details>}
           {operationCode === "ai.redraw" && <details className="studio-tool-help"><summary>高清重绘与印花提取的区别</summary><p>重绘只提升清晰度，保留主体、背景与构图。需要去除产品、单独还原图案，请使用“印花提取”。</p></details>}
           {resultAsset?.has_alpha && <details className="studio-tool-help"><summary>预览背景（不影响导出）</summary><PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} /></details>}
           </fieldset>
@@ -1175,7 +1204,7 @@ function StudioPage({
           </div>
         </aside>
       </div>
-      {quote && <QuoteDialog balance={bootstrap.points.balance} busy={busy === "submit"} error={error} operation={selectedOperation} quote={quote} onCancel={() => { if (!submitting.current) setQuote(null); }} onConfirm={() => void submitJob()} />}
+      {quote && <QuoteDialog balance={bootstrap.points.balance} busy={busy === "submit"} error={error} operation={selectedOperation} quote={quote} parameters={quoteParameters.current} onCancel={() => { if (!submitting.current) setQuote(null); }} onConfirm={() => void submitJob()} />}
     </div>
   );
 }
@@ -1591,6 +1620,7 @@ function QuoteDialog({
   error,
   operation,
   quote,
+  parameters,
   onCancel,
   onConfirm,
 }: {
@@ -1599,6 +1629,7 @@ function QuoteDialog({
   error?: string;
   operation?: Operation;
   quote: Quote;
+  parameters?: Record<string, unknown>;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -1608,6 +1639,7 @@ function QuoteDialog({
       <section aria-labelledby="quote-title" aria-modal="true" className="user-modal" role="dialog">
         <header><span><small>提交前确认</small><h2 id="quote-title">任务报价</h2></span><button aria-label="关闭报价" disabled={busy} onClick={onCancel} title="关闭" type="button"><X size={19} /></button></header>
         <div className="user-quote-operation"><span className="user-operation-icon"><Sparkles size={19} /></span><span><strong>{operation?.name || operationName(quote.operation_code)}</strong><small>报价在 {dateTime(quote.expires_at)} 前有效</small></span></div>
+        {quote.operation_code === "ai.extract_print" && <dl className="user-quote-lines"><div><dt>输出背景</dt><dd>{parameters?.output_mode === "opaque" ? "原产品底色（不透明）" : "透明背景"}</dd></div><div><dt>产品底色</dt><dd><i className="print-quote-color" style={{ backgroundColor: String(parameters?.background_color || "#000000") }} />{String(parameters?.background_color || "自动识别")}</dd></div></dl>}
         <dl className="user-quote-lines"><div><dt>基础积分</dt><dd>{quote.base_points}</dd></div><div><dt>会员优惠</dt><dd>-{quote.discount_points}</dd></div>{quote.surcharge_points > 0 && <div><dt>参数附加</dt><dd>+{quote.surcharge_points}</dd></div>}<div className="total"><dt>本次需要</dt><dd>{quote.final_points} 积分</dd></div><div><dt>当前余额</dt><dd>{balance} 积分</dd></div></dl>
         {insufficient && <InlineMessage tone="warning">还差 {quote.final_points - balance} 积分，当前无法提交任务。可前往积分流水查看账户变化。</InlineMessage>}
         {error && <InlineMessage tone="error">{error}</InlineMessage>}

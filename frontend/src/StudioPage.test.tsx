@@ -11,7 +11,7 @@ const bootstrap = {
   notifications: { unread_count: 0 },
   preferences: { theme: "light", studio_layout: { last_tool: "ai.generate" } },
 };
-const operations = ["ai.generate", "ai.redraw", "color.effect"].map((code) => ({
+const operations = ["ai.generate", "ai.redraw", "color.effect", "ai.extract_print"].map((code) => ({
   id: code, code, name: code, engine_type: code.startsWith("ai") ? "sub2api" : "local", enabled: true,
   member_base_points: 20, current_price: { base_points: 20 },
 }));
@@ -42,7 +42,7 @@ describe("Studio task workflow", () => {
       if (url === "/api/v1/app/bootstrap") return response(bootstrap);
       if (url === "/api/v1/operations") return response({ items: operations });
       if (url.startsWith("/api/v1/assets?")) return response({ items: sourceAssets });
-      if (url === "/api/v1/jobs/quote") return response({ quote });
+      if (url === "/api/v1/jobs/quote") return response({ quote: { ...quote, operation_code: JSON.parse(String(init?.body)).operation_code } });
       if (url === "/api/v1/jobs") return submit(url, init);
       if (url.startsWith("/api/v1/jobs?")) return response({ items: [restoredJob] });
       if (url === "/api/v1/jobs/job-1/events") return events();
@@ -50,9 +50,10 @@ describe("Studio task workflow", () => {
       if (url === "/api/v1/assets/source-1") return sourceRead();
       if (url === "/api/v1/assets/result-1") return assetRead();
       if (url.endsWith("/lineage")) return response({ items: [result] });
+      if (url.includes("/print-background")) return response({ color: "#000000", confidence: .9, method: "product-color-estimate" });
       if (url.endsWith("/download-url")) return response({ url: url.includes("source-1") ? "/original-image.png" : "/test-image.png", expires_at: "2099-01-01T00:00:00Z" });
       if (url === "/api/v1/points/balance") return response({ account: { ...bootstrap.points, balance: 180 } });
-      if (url === "/api/v1/me/preferences") return response({ preferences: bootstrap.preferences });
+      if (url === "/api/v1/me/preferences") return response({ preferences: { ...bootstrap.preferences, studio_layout: { ...bootstrap.preferences.studio_layout, ...JSON.parse(String(init?.body || "{}")).studio_layout } } });
       throw new Error(`Unexpected test request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -68,6 +69,34 @@ describe("Studio task workflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
     return screen.findByRole("dialog", { name: "任务报价" });
   }
+
+  it("quotes and submits the chosen print mode and corrected product color", async () => {
+    window.history.replaceState({}, "", "/app/studio?source=source-1&tool=ai.extract_print");
+    render(<UserApp />);
+    await screen.findByText(/已估计产品底色/);
+    expect(screen.getByRole("button", { name: "透明背景" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "原产品底色（不透明）" }));
+    fireEvent.change(screen.getByLabelText("产品底色"), { target: { value: "#245eaa" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
+    const dialog = await screen.findByRole("dialog", { name: "任务报价" });
+    expect(within(dialog).getByText("原产品底色（不透明）")).toBeInTheDocument();
+    expect(within(dialog).getByText("#245EAA")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(submit.mock.calls[0][1]?.body)).parameters).toMatchObject({ output_mode: "opaque", background_color: "#245EAA" });
+    expect(fetchMock.mock.calls.some(([url, init]) => url === "/api/v1/me/preferences" && String(init?.body).includes('"print_output_mode":"opaque"'))).toBe(true);
+  });
+
+  it("restores print mode and product color without replacing them with a new estimate", async () => {
+    restoredJob = { ...job, operation_code: "ai.extract_print", source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: { output_mode: "opaque", background_color: "#245EAA", quality: "high" } };
+    events.mockImplementation(async () => response({ job: restoredJob }));
+    window.history.replaceState({}, "", "/app/studio?job=job-1");
+    render(<UserApp />);
+    await screen.findByRole("img", { name: "图片任务结果" });
+    expect(screen.getByRole("button", { name: "原产品底色（不透明）" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("产品底色")).toHaveValue("#245eaa");
+    expect(fetchMock.mock.calls.some(([url]) => url.includes("/print-background"))).toBe(false);
+  });
 
   it("keeps the quote on a lost response and retries with the same key and parameters", async () => {
     submit.mockRejectedValueOnce(new TypeError("网络连接中断"));

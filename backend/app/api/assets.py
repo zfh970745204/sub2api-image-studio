@@ -13,7 +13,9 @@ from sqlalchemy import String, cast, func, select
 from app.api.dependencies import Principal, require_permission
 from app.api.errors import ApiError
 from app.domain.assets import ASSET_KINDS, ASSET_STATUSES
+from app.image_ops import ImageInputError
 from app.object_storage import ObjectStorageError
+from app.print_extraction import product_background
 from app.repositories.models import Asset, ObjectDeletionQueue
 from app.services.asset_files import AssetInputError, prepare_asset
 from app.services.assets import AssetService, asset_page_statement
@@ -276,6 +278,35 @@ async def get_thumbnail(asset_id: uuid.UUID, request: Request, principal: AssetR
         except ObjectStorageError as exc:
             raise ApiError(503, "THUMBNAIL_UNAVAILABLE", "缩略图暂不可用") from exc
     return RedirectResponse(url, headers={"Cache-Control": "private, max-age=60"})
+
+
+@router.get("/api/v1/assets/{asset_id}/print-background")
+async def get_print_background(
+    asset_id: uuid.UUID,
+    request: Request,
+    principal: AssetReader,
+    x: float | None = Query(default=None, ge=0, le=1),
+    y: float | None = Query(default=None, ge=0, le=1),
+) -> dict[str, Any]:
+    if (x is None) != (y is None):
+        raise ApiError(422, "INVALID_SAMPLE_POINT", "取色坐标必须同时提供横向和纵向位置")
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        asset = await service.require_usable(session, asset_id, owner_id=principal.user_id)
+        if asset.mime_type not in {"image/png", "image/jpeg", "image/webp"} or asset.kind in {
+            "mask",
+            "thumbnail",
+        }:
+            raise ApiError(422, "INVALID_COLOR_SOURCE", "请使用原图或图片结果识别产品底色")
+        key = asset.object_key
+    try:
+        raw = await _storage(request).get_object(key)
+        return await asyncio.to_thread(product_background, raw, (x, y) if x is not None else None)
+    except ObjectStorageError as exc:
+        raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "原图暂时无法读取") from exc
+    except (ImageInputError, OSError) as exc:
+        raise ApiError(
+            422, "PRODUCT_COLOR_UNAVAILABLE", "无法识别此处的底色，请手动选色或换个位置取色。"
+        ) from exc
 
 
 @router.get("/api/v1/assets/{asset_id}/lineage")
