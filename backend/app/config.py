@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     result_dir: Path = PROJECT_ROOT / "backend" / "data" / "results"
     database_path: Path = PROJECT_ROOT / "backend" / "data" / "studio.db"
     background_model_dir: Path = PROJECT_ROOT / "backend" / "data" / "models"
+    background_model_bundle_dir: Path = Path("/opt/sub2image/models")
+    background_model_threads: int = Field(default=1, ge=1, le=8)
+    background_model_startup_timeout_seconds: int = Field(default=180, ge=30, le=600)
     numba_cache_dir: Path = PROJECT_ROOT / "backend" / "data" / "cache" / "numba"
 
     @property

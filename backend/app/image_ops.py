@@ -11,6 +11,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageColor, ImageFilter, ImageOps, UnidentifiedImageError
 
+from .config import Settings, get_settings
+from .services.background_models import resolve_background_model
 from .services.image_runtime import configure_image_runtime
 
 _background_lock = RLock()
@@ -74,15 +76,37 @@ def real_esrgan_available() -> bool:
     return importlib.util.find_spec("realesrgan_ncnn_py") is not None
 
 
-@lru_cache(maxsize=4)
-def _background_session(model_name: str):
-    from rembg import new_session
+@lru_cache(maxsize=1)
+def _background_session(model_name: str, model_path: str, threads: int):
+    import onnxruntime as ort
+    from rembg.sessions import sessions_class
 
-    return new_session(model_name)
+    session_class = next((item for item in sessions_class if item.name() == model_name), None)
+    if session_class is None:
+        raise RuntimeError("未安装所选抠图模型的推理引擎。")
+
+    class LocalSession(session_class):
+        @classmethod
+        def download_models(cls, *args, **kwargs):
+            return model_path
+
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = threads
+    options.inter_op_num_threads = 1
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    return LocalSession(
+        model_name, options, providers=["CPUExecutionProvider"], model_path=model_path
+    )
 
 
-def remove_background(raw_png: bytes, model_name: str) -> bytes:
-    configure_image_runtime()
+def remove_background(
+    raw_png: bytes, model_name: str, *, settings: Settings | None = None
+) -> bytes:
+    settings = settings or get_settings()
+    configure_image_runtime(settings)
+    model_path = resolve_background_model(settings, model_name)
     try:
         from rembg import remove
     except ImportError as exc:
@@ -92,7 +116,9 @@ def remove_background(raw_png: bytes, model_name: str) -> bytes:
 
     try:
         with _background_lock:
-            session = _background_session(model_name)
+            session = _background_session(
+                model_name, str(model_path), settings.background_model_threads
+            )
         result = remove(raw_png, session=session)
     except SystemExit as exc:
         raise RuntimeError("The ONNX background removal runtime could not be loaded.") from exc

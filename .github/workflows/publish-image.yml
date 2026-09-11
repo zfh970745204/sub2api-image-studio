@@ -75,6 +75,15 @@ jobs:
           python -c "import cv2; from app.workers.worker import WorkerSettings;
           from app.workers.scheduler import SchedulerSettings;
           print(WorkerSettings.queue_name, SchedulerSettings.queue_name)"
+      - name: Verify offline cutout with production resource limits
+        timeout-minutes: 5
+        run: >-
+          docker run --rm --network none --cpus 1.5 --memory 1280m --pids-limit 300
+          ghcr.io/${{ github.repository }}:sha-${{ github.event.workflow_run.head_sha }}
+          python -c "import asyncio; from app.config import Settings;
+          from app.workers.worker import WorkerSettings;
+          from app.services.cutout_process import BackgroundRemovalRunner;
+          asyncio.run(BackgroundRemovalRunner(Settings()).warmup()); print('offline-cutout-ready')"
       - name: Mirror the Redis runtime to GHCR
         run: |
           docker pull redis:7-alpine

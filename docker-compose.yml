@@ -28,6 +28,9 @@ x-app-environment: &app-environment
   RESULT_DIR: /tmp/sub2image-results
   DATABASE_PATH: /tmp/legacy-studio.db
   BACKGROUND_MODEL_DIR: /models
+  BACKGROUND_MODEL_BUNDLE_DIR: /opt/sub2image/models
+  BACKGROUND_MODEL_THREADS: ${BACKGROUND_MODEL_THREADS:-1}
+  BACKGROUND_MODEL_STARTUP_TIMEOUT_SECONDS: ${BACKGROUND_MODEL_STARTUP_TIMEOUT_SECONDS:-180}
   U2NET_HOME: /models
   NUMBA_CACHE_DIR: /app/backend/data/cache/numba
 

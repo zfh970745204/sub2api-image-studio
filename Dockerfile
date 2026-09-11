@@ -14,6 +14,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir --constraint backend/constraints.lock ./backend
+# Keep weights outside the mounted /models volume, including on upgrades with an
+# existing empty cache. Image publication fails if provisioning/checksum fails.
+RUN python -m app.services.background_models --directory /opt/sub2image/models \
+    && chmod -R a+rX /opt/sub2image/models
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /app app \

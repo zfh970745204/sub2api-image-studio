@@ -17,7 +17,6 @@ from app.image_ops import (
     ImageInputError,
     apply_color_effect,
     has_chroma_key_background,
-    remove_background,
     remove_solid_background,
     upscale,
     validate_edit_mask,
@@ -32,6 +31,7 @@ from app.services.configuration import (
     RuntimeConfigCache,
     sub2api_profile_settings,
 )
+from app.services.cutout_process import BackgroundRemovalRunner
 from app.services.jobs import ClaimedJob, PermanentJobError, RetryableJobError
 from app.services.security import SecurityService
 from app.sub2api import Sub2APIClient, Sub2APIError
@@ -114,6 +114,7 @@ class ImageJobExecutor:
         self.config_cache = config_cache
         self.circuit_breaker = UpstreamCircuitBreaker()
         self.profile_breakers: dict[str, UpstreamCircuitBreaker] = {"default": self.circuit_breaker}
+        self.background_remover = BackgroundRemovalRunner(settings)
 
     async def __call__(self, claim: ClaimedJob) -> dict[str, Any]:
         started = time.perf_counter()
@@ -359,10 +360,14 @@ class ImageJobExecutor:
             if await asyncio.to_thread(has_chroma_key_background, source):
                 output, metadata = await asyncio.to_thread(remove_solid_background, source)
             else:
-                output = await asyncio.to_thread(
-                    remove_background, source, self.settings.background_model
-                )
-                metadata = {"method": "subject-segmentation"}
+                await self._progress(claim, 30)
+                output = await self.background_remover.remove(source)
+                metadata = {
+                    "method": "subject-segmentation",
+                    "model": self.settings.background_model,
+                    "inference_threads": self.settings.background_model_threads,
+                }
+            await self._progress(claim, 80)
             return output, "png", None, metadata
         if operation in {"upscale.2x", "upscale.4x"}:
             self._require_source(source)
