@@ -9,6 +9,9 @@ import { usePageVisible } from "./usePageVisible";
 import { AssetPickerDialog } from "./AssetPickerDialog";
 import { StudioTaskQueue } from "./StudioTaskQueue";
 import { BackgroundSelectionEditor } from "./BackgroundSelectionEditor";
+import { InfoHint } from "./InfoHint";
+import { CropEditor } from "./CropEditor";
+import { createSelectionLoader } from "./selection-loader";
 import {
   AlertCircle,
   ArrowRight,
@@ -17,6 +20,7 @@ import {
   Brush,
   Check,
   CheckCircle2,
+  Crop,
   ChevronDown,
   Clock3,
   Coins,
@@ -218,6 +222,7 @@ function formatBytes(value: number): string {
 function operationName(code: string): string {
   if (code === "upload") return "上传原图";
   if (code === "cutout.refine") return "选区修边";
+  if (code === "image.crop") return "裁切";
   return OPERATION_META[code]?.label || code;
 }
 
@@ -778,6 +783,9 @@ function StudioPage({
   const [trackedJobs, setTrackedJobs] = useState<ImageJob[]>([]);
   const [resultAsset, setResultAsset] = useState<Asset | null>(null);
   const [selectionAsset, setSelectionAsset] = useState<Asset | null>(null);
+  const [cropAsset, setCropAsset] = useState<Asset | null>(null);
+  const selectionLoader = useMemo(createSelectionLoader, []);
+  useEffect(() => () => selectionLoader.clear(), [selectionLoader]);
   const [lineage, setLineage] = useState<Asset[]>([]);
   const [previewMode, setPreviewMode] = useState<"transparent" | "white" | "dark" | "color" | "image">("transparent");
   const [previewColor, setPreviewColor] = useState("#e8c7b5");
@@ -829,7 +837,7 @@ function StudioPage({
   const refinementTarget = resultAsset || source;
   const canRefine = refinementTarget && ["original", "result"].includes(refinementTarget.kind) && (
     operationCode === "cutout.smart" || (operationCode === "ai.extract_print" && resultAsset) ||
-    ["cutout.smart", "cutout.refine", "ai.extract_print"].includes(refinementTarget.operation_code)
+    ["cutout.smart", "cutout.refine", "ai.extract_print", "image.crop"].includes(refinementTarget.operation_code)
   );
   const sourceUrl = useSignedAssetUrl(compareSource ? source?.id || null : null, previewRevision, (reason) => setError(messageOf(reason, "原图预览地址获取失败")));
   const resultUrl = useSignedAssetUrl(resultAsset?.id || null, previewRevision, (reason) => setError(messageOf(reason, "结果预览地址获取失败")));
@@ -1165,7 +1173,7 @@ function StudioPage({
           <header className="user-canvas-head">
             <span><FileImage size={17} /><strong>{compareSource ? "原图与结果" : "创作预览"}</strong></span>
             <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{(source || resultAsset) && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
-            <div className="user-canvas-actions">{canRefine && <button className="user-secondary compact" disabled={Boolean(busy)} onClick={() => setSelectionAsset(refinementTarget)} type="button"><Brush size={16} />选区修边</button>}{resultAsset && <button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button>}</div>
+            <div className="user-canvas-actions">{refinementTarget && ["original", "result"].includes(refinementTarget.kind) && <button className="user-secondary compact" disabled={Boolean(busy)} onClick={() => { detachJob(); setCropAsset(refinementTarget); }} type="button"><Crop size={16} />裁切</button>}{canRefine && <button className="user-secondary compact" disabled={Boolean(busy)} onMouseEnter={() => { if (refinementTarget) selectionLoader.prefetch(refinementTarget.id); }} onFocus={() => { if (refinementTarget) selectionLoader.prefetch(refinementTarget.id); }} onClick={() => { detachJob(); setSelectionAsset(refinementTarget); }} type="button"><Brush size={16} />选区修边</button>}{resultAsset && <button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button>}</div>
           </header>
           <ComparisonPreview key={`${sourceId}:${resultAsset?.id}:${operationCode}`} compare={compareSource} source={source ? { asset: source, url: sourceUrl } : null} result={resultAsset ? { asset: resultAsset, url: resultUrl } : null}
             backgroundClass={`preview-${previewMode}`} backgroundStyle={previewStyle}
@@ -1181,7 +1189,7 @@ function StudioPage({
               <JobProgress job={activeJob} />
             )}
           {(resultAsset || needsMask) && <div className="user-canvas-foot"><span>{needsMask && !resultAsset ? "紫色涂抹区域将被修改，其他区域保留" : "原图保留 · 结果为独立版本"}</span>{resultAsset && resultAsset.kind !== "vector" && <button disabled={Boolean(busy)} onClick={() => { chooseSource(resultAsset); selectOperation("ai.redraw"); }} type="button">继续编辑结果<ArrowRight size={14} /></button>}</div>}
-          <StudioTaskQueue jobs={trackedJobs} focusedJobId={activeJob?.id || null} concurrency={bootstrap.membership.entitlements.max_concurrent_jobs} onUpdate={trackJob} onSettled={refreshBalance} onOpen={(id) => navigate(`/app/studio?job=${id}`)} nameOf={operationName} />
+          <StudioTaskQueue jobs={trackedJobs} focusedJobId={activeJob?.id || null} onUpdate={trackJob} onSettled={refreshBalance} />
           {error && !quote && <InlineMessage tone="error">{error}</InlineMessage>}
           {notice && !error && <InlineMessage tone="success">{notice}</InlineMessage>}
           {pollError && <InlineMessage tone="warning">{pollError}</InlineMessage>}
@@ -1196,36 +1204,31 @@ function StudioPage({
           )}
         </section>
         <aside className="user-studio-controls">
-          <header><span>创作设置</span><h2>{meta.label}</h2><p>{meta.description}</p></header>
+          <header><h2>{meta.label}</h2><InfoHint label={`${meta.label}说明`}>{meta.description} {operationCode === "cutout.smart" || operationCode === "ai.extract_print" ? "完成后可用选区修边补选背景、取消误选并调整容差，手动修边不扣积分。" : ""}</InfoHint></header>
           <fieldset className="user-studio-fields" disabled={Boolean(busy)}>
-          {isGeneration && <section className="studio-references"><header><span>参考图片 <small>可选 · {referenceIds.length}/6</small></span><button type="button" onClick={() => uploadRef.current?.click()} disabled={referenceIds.length >= 6}><Plus size={14} />添加</button></header><div>{referenceIds.map((id, index) => <div key={id}><button type="button" aria-label={`查看参考图 ${index + 1}`} aria-pressed={sourceId === id} onClick={() => changeReferences([id, ...referenceIds.filter((value) => value !== id)])}><ImageThumbnail id={id} /><small>{index === 0 ? "主参考" : `参考 ${index + 1}`}</small></button><button className="studio-reference-remove" type="button" aria-label={`移除参考图 ${index + 1}`} onClick={() => changeReferences(referenceIds.filter((value) => value !== id))}><X size={12} /></button></div>)}{!referenceIds.length && <button className="studio-reference-empty" type="button" onClick={() => uploadRef.current?.click()}><ImagePlus size={20} /><span>上传产品或灵感图<small>支持多选，也可拖入画布</small></span></button>}</div><button className="user-secondary" aria-label="从素材库添加参考图" disabled={referenceIds.length >= 6} onClick={() => setAssetPicker("reference")} type="button"><Images size={16} />从素材库添加</button></section>}
+          {isGeneration && <section className="studio-references"><header><span>参考图片 <small>可选 · {referenceIds.length}/6</small></span><button type="button" onClick={() => uploadRef.current?.click()} disabled={referenceIds.length >= 6}><Plus size={14} />添加</button><button aria-label="从素材库添加参考图" title="从素材库添加参考图" disabled={referenceIds.length >= 6} onClick={() => setAssetPicker("reference")} type="button"><Images size={14} />素材库</button></header><div>{referenceIds.map((id, index) => <div key={id}><button type="button" aria-label={`查看参考图 ${index + 1}`} aria-pressed={sourceId === id} onClick={() => changeReferences([id, ...referenceIds.filter((value) => value !== id)])}><ImageThumbnail id={id} /><small>{index === 0 ? "主参考" : `参考 ${index + 1}`}</small></button><button className="studio-reference-remove" type="button" aria-label={`移除参考图 ${index + 1}`} onClick={() => changeReferences(referenceIds.filter((value) => value !== id))}><X size={12} /></button></div>)}{!referenceIds.length && <button className="studio-reference-empty" type="button" onClick={() => uploadRef.current?.click()}><ImagePlus size={20} /><span>上传产品或灵感图<small>支持多选，也可拖入画布</small></span></button>}</div></section>}
           {operationCode === "ai.ecommerce" && <div className="studio-commerce-fields"><label className="user-field"><span>电商平台</span><select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}><option value="amazon">Amazon</option><option value="etsy">Etsy</option><option value="shopify">Shopify</option><option value="taobao">淘宝 / 天猫</option><option value="jd">京东</option><option value="douyin">抖音电商</option></select></label><label className="user-field"><span>生成张数</span><select value={form.imageCount} onChange={(event) => setForm({ ...form, imageCount: Number(event.target.value) })}>{Array.from({ length: 8 }, (_, i) => <option value={i + 1} key={i}>{i + 1} 张</option>)}</select></label></div>}
           {meta.source && (
             <div className="studio-source-picker"><div className="user-field"><span>来源素材</span><button className="studio-source-choice" aria-label="从素材库选择图片" onClick={() => setAssetPicker("source")} type="button">{source ? <><ImageThumbnail id={source.id} /><span><strong>{source.original_filename || operationName(source.operation_code)}</strong><small>{source.width} × {source.height} · 点击更换</small></span></> : <><Images size={20} /><span>从素材库选择图片</span></>}<ChevronDown size={16} /></button></div><button className="user-secondary" aria-label={source ? "替换 / 上传图片" : "上传图片"} title={source ? "替换 / 上传图片" : "上传图片"} disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}</button></div>
           )}
           <input accept="image/png,image/jpeg,image/webp" hidden multiple={isGeneration} onChange={(event) => { if (isGeneration) void uploadReferences(Array.from(event.target.files || [])); else void upload(event.target.files?.[0]); }} ref={uploadRef} type="file" />
           {operationCode === "ai.extract_print" && <>
-            <Segmented label="输出背景" value={form.printOutputMode} options={[["transparent", "透明背景"], ["opaque", "原产品底色（不透明）"]]} onChange={(value) => {
+            <Segmented label="输出背景" hint="透明模式去除背景；不透明模式保留自动识别的原产品颜色作为平整背景。" value={form.printOutputMode} options={[["transparent", "透明背景"], ["opaque", "不透明"]]} onChange={(value) => {
               const mode = value === "opaque" ? "opaque" : "transparent";
               setForm({ ...form, printOutputMode: mode }); setQuote(null);
               void api.updatePreferences({ studio_layout: { print_output_mode: mode } }).then(({ preferences }) => onBootstrap({ ...bootstrapRef.current, preferences })).catch(() => undefined);
             }} />
-            <p className="user-mask-hint">透明模式去除背景；不透明模式保留自动识别的原产品颜色作为平整背景。</p>
-            <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />
-            <label className="user-field"><span>输出尺寸</span><select aria-label="输出尺寸" value={form.printOutputSize} onChange={(event) => setForm({ ...form, printOutputSize: event.target.value })}><option value="2048x2048">方形 · 2048 × 2048</option><option value="2048x3072">竖版 · 2048 × 3072</option><option value="3072x2048">横版 · 3072 × 2048</option><option value="3072x3072">大方形 · 3072 × 3072</option></select><small>按比例适配画布，完整保留图案；放大尺寸不等于增加原始细节。</small></label>
+            <label className="user-field"><span className="studio-field-label">输出尺寸<InfoHint label="输出尺寸说明">按比例适配画布，完整保留图案；放大尺寸不等于增加原始细节。</InfoHint></span><select aria-label="输出尺寸" value={form.printOutputSize} onChange={(event) => setForm({ ...form, printOutputSize: event.target.value })}><option value="2048x2048">方形 · 2048 × 2048</option><option value="2048x3072">竖版 · 2048 × 3072</option><option value="3072x2048">横版 · 3072 × 2048</option><option value="3072x3072">大方形 · 3072 × 3072</option></select></label>
           </>}
           {(operationCode.startsWith("ai.") || operationCode === "ai.generate") && (
             <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={3} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
           )}
           {isGeneration && <label className="user-field"><span>画布尺寸</span><select onChange={(event) => setForm({ ...form, size: event.target.value })} value={form.size}><option value="1024x1024">方形 · 1024 × 1024</option><option value="1024x1536">竖版 · 1024 × 1536</option><option value="1536x1024">横版 · 1536 × 1024</option><option value="auto">自动</option></select></label>}
-          {(operationCode.startsWith("ai.")) && <Segmented label="生成质量" value={form.quality} options={[["medium", `标准 · ${estimatedPoints(selectedOperation, { quality: "medium" }) ?? "--"} 积分`], ["high", `精细 · ${estimatedPoints(selectedOperation, { quality: "high" }) ?? "--"} 积分`]]} onChange={(value) => setForm({ ...form, quality: value })} />}
-          {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
+          {(operationCode.startsWith("ai.")) && <Segmented label="生成质量" value={form.quality} options={[["medium", "标准"], ["high", "精细"]]} onChange={(value) => setForm({ ...form, quality: value })} />}
+          {needsMask && <div className="user-field"><span className="studio-field-label">修改区域<InfoHint label="修改区域说明">直接在原图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</InfoHint></span><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
-          {operationCode === "cutout.smart" && <p className="user-mask-hint">自动抠图后，点击画布上方“选区修边”检查红色删除区域。可补选残留、取消误选、调整容差并实时预览；手动修边不扣积分。单色底原图也可直接进入修边。</p>}
-          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>预览背景只用于检查边缘，不改变生成和导出。透明模式去除底色后，可通过“选区修边”补选图案内部残留、取消误选并检查细边；修边不扣积分。不透明模式输出原产品颜色的平整背景，不保留产品外形、纹理和褶皱。有多个图案时，可在补充要求中指定提取区域。</p></details>}
-          {operationCode === "ai.redraw" && <details className="studio-tool-help"><summary>高清重绘与印花提取的区别</summary><p>重绘只提升清晰度，保留主体、背景与构图。需要去除产品、单独还原图案，请使用“印花提取”。</p></details>}
-          {resultAsset?.has_alpha && operationCode !== "ai.extract_print" && <details className="studio-tool-help"><summary>预览背景（不影响导出）</summary><PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} /></details>}
+          <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />
           </fieldset>
           <div className="user-studio-submit">
           <div className="user-quote-summary"><span>预计积分</span><strong>{estimatedPoints(selectedOperation, parameters()) ?? "--"}<small>积分</small></strong></div>
@@ -1243,7 +1246,8 @@ function StudioPage({
         } else chooseSource(asset);
         setAssetPicker(null);
       }} />}
-      {selectionAsset && <BackgroundSelectionEditor key={selectionAsset.id} asset={selectionAsset} previewUrl={selectionAsset.id === resultAsset?.id ? resultUrl : sourceUrl} onClose={() => setSelectionAsset(null)} onSaved={(saved) => {
+      {cropAsset && <CropEditor asset={cropAsset} previewUrl={cropAsset.id === resultAsset?.id ? resultUrl : sourceUrl} onClose={() => setCropAsset(null)} onSaved={(saved) => { setCropAsset(null); chooseSource(saved); if (isGeneration) changeReferences([saved.id, ...referenceIds.filter((id) => id !== cropAsset.id)].slice(0, 6)); setResultAsset(saved); setError(""); setNotice("裁切已保存为新版本，未扣积分。"); }} />}
+      {selectionAsset && <BackgroundSelectionEditor key={selectionAsset.id} asset={selectionAsset} loader={selectionLoader} previewUrl={selectionAsset.id === resultAsset?.id ? resultUrl : sourceUrl} onClose={() => setSelectionAsset(null)} onSaved={(saved) => {
         setSelectionAsset(null); detachJob(); setBatchResults([]); setResultAsset(saved);
         setAssets((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
         setQuote(null); setError(""); setNotice("修边已保存为新版本，未扣积分。可继续修边或下载透明 PNG。");
@@ -1710,10 +1714,10 @@ function PreviewBackgroundControls({
 }) {
   return (
     <section className="user-preview-controls">
-      <header><span>预览背景</span><em>仅本地预览</em></header>
-      <div>{[["transparent", "透明"], ["white", "白色"], ["dark", "深色"]].map(([value, label]) => <button className={mode === value ? "active" : ""} key={value} onClick={() => onMode(value as typeof mode)} type="button"><i className={`preview-${value}`} />{label}</button>)}</div>
-      <label className={mode === "color" ? "active" : ""}><input aria-label="自定义背景色" onChange={(event) => { onColor(event.target.value); onMode("color"); }} type="color" value={color} /><span>自定义色</span></label>
-      <button className={mode === "image" ? "active" : ""} onClick={() => previewRef.current?.click()} type="button"><ImagePlus size={16} />本地背景图</button>
+      <header><span>预览底色</span><InfoHint label="预览背景说明">只影响右侧效果图的显示，不改变原图、生成参数或导出文件。不透明图片需先抠图才能看到底色。</InfoHint></header>
+      <div>{[["transparent", "透明"], ["white", "白色"], ["dark", "深色"]].map(([value, label]) => <button aria-label={label} aria-pressed={mode === value} title={label} className={mode === value ? "active" : ""} key={value} onClick={() => onMode(value as typeof mode)} type="button"><i className={`preview-${value}`} />{label}</button>)}</div>
+      <label title="自定义背景色" className={mode === "color" ? "active" : ""}><input aria-label="自定义背景色" onChange={(event) => { onColor(event.target.value); onMode("color"); }} type="color" value={color} /><span>自定义色</span></label>
+      <button aria-label="本地背景图" title="本地背景图" className={mode === "image" ? "active" : ""} onClick={() => previewRef.current?.click()} type="button"><ImagePlus size={16} />图片</button>
       <input accept="image/*" hidden onChange={(event) => { onImage(event.target.files?.[0]); event.currentTarget.value = ""; }} ref={previewRef} type="file" />
     </section>
   );
@@ -1737,8 +1741,8 @@ function ConfirmDialog({
   return <div className="user-modal-layer"><section aria-labelledby="confirm-title" aria-modal="true" className="user-modal compact" role="dialog"><header><h2 id="confirm-title">{title}</h2><button aria-label="关闭" onClick={onCancel} title="关闭" type="button"><X size={19} /></button></header><p>{description}</p><footer><button className="user-secondary" onClick={onCancel} type="button">取消</button><button className={danger ? "user-danger-button" : "user-primary"} onClick={onConfirm} type="button">{danger && <Trash2 size={17} />}{confirmLabel}</button></footer></section></div>;
 }
 
-function Segmented({ label, value, options, onChange }: { label: string; value: string; options: string[][]; onChange: (value: string) => void }) {
-  return <div className="user-field"><span>{label}</span><div className="user-segmented">{options.map(([option, optionLabel]) => <button aria-pressed={value === option} className={value === option ? "active" : ""} key={option} onClick={() => onChange(option)} type="button">{optionLabel}</button>)}</div></div>;
+function Segmented({ label, hint, value, options, onChange }: { label: string; hint?: string; value: string; options: string[][]; onChange: (value: string) => void }) {
+  return <div className="user-field"><span className="studio-field-label">{label}{hint && <InfoHint label={`${label}说明`}>{hint}</InfoHint>}</span><div className="user-segmented">{options.map(([option, optionLabel]) => <button aria-pressed={value === option} className={value === option ? "active" : ""} key={option} onClick={() => onChange(option)} type="button">{optionLabel}</button>)}</div></div>;
 }
 
 function StatusBadge({ status, label }: { status: string; label?: string }) {

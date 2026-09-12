@@ -130,6 +130,20 @@ describe("background selection editor", () => {
     expect(screen.getByRole("button", { name: "保存修边结果" })).toBeEnabled();
   });
 
+  it("displays restoration pixels before the result download and selection computation finish", async () => {
+    let finishResult!: (response: Response) => void;
+    const fetchBase = fetchMock.getMockImplementation()! as (url: string, init?: RequestInit) => Promise<Response>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => url === "/private/result" ? new Promise<Response>((resolve) => { finishResult = resolve; }) : fetchBase(url, init));
+    render(<BackgroundSelectionEditor asset={asset} onClose={vi.fn()} onSaved={vi.fn()} />);
+    expect(await screen.findByAltText("去底前原图预览")).toHaveAttribute("src", expect.stringContaining("blob:"));
+    expect(FakeWorker.latest.postMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "保存修边结果" })).toBeDisabled();
+    await act(async () => { finishResult(new Response(new Blob(["result"]))); });
+    await waitFor(() => expect(FakeWorker.latest.postMessage).toHaveBeenCalled());
+    FakeWorker.latest.emit(frame());
+    expect(screen.queryByAltText("去底前原图预览")).not.toBeInTheDocument();
+  });
+
   it.each([undefined, null, "", "blob:expired-preview"])("loads without a usable optional preview (%s)", async (previewUrl) => {
     render(<BackgroundSelectionEditor asset={asset} previewUrl={previewUrl} onClose={vi.fn()} onSaved={vi.fn()} />);
     if (previewUrl) fireEvent.error(screen.getByRole("img", { name: "已有结果预览" }));

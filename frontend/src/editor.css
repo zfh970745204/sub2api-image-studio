@@ -1,14 +1,14 @@
 /* Canonical editor layout: keep all grid placement and viewport sizing here. */
-.user-page-studio { width: 100%; max-width: none; height: auto; padding: 22px 26px; }
+.user-page.user-page-studio { width: 100%; max-width: none; height: auto; padding: 12px 24px; }
 .user-studio-page { min-width: 0; }
-.user-studio-page .user-page-header { margin-bottom: 20px; align-items: center; }
-.user-studio-page .user-page-header h1 { margin: 0 0 5px; font-size: 23px; letter-spacing: -.4px; }
+.user-studio-page .user-page-header { margin-bottom: 12px; align-items: center; }
+.user-studio-page .user-page-header h1 { margin: 0; font-size: 21px; letter-spacing: -.4px; }
 .user-studio-page .user-page-header > div > span { display: none; }
-.user-studio-page .user-page-header p { margin: 0; font-size: 12px; }
+.user-studio-page .user-page-header p { display: none; }
 .user-studio-page .user-page-header aside { padding: 0; }
 .user-studio-layout { display: grid; grid-template-areas: "tools tools" "canvas settings"; grid-template-columns: minmax(0, 1fr) clamp(286px, 21vw, 332px); grid-template-rows: auto auto; align-items: stretch; gap: 16px; min-width: 0; }
 .user-toolrail { grid-area: tools; display: flex; flex-wrap: wrap; gap: 5px; padding: 7px; min-width: 0; border: 1px solid var(--user-line); border-radius: 12px; background: var(--user-paper); }
-.user-toolrail button { display: flex; flex-direction: row; align-items: center; justify-content: center; flex: 1 0 auto; gap: 8px; min-width: 86px; min-height: 54px; padding: 10px 12px; border: 0; border-radius: 8px; color: var(--user-muted); background: transparent; cursor: pointer; }
+.user-toolrail button { display: flex; flex-direction: row; align-items: center; justify-content: center; flex: 1 0 auto; gap: 8px; min-width: 86px; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 8px; color: var(--user-muted); background: transparent; cursor: pointer; }
 .user-toolrail button span { font-size: 12px; white-space: nowrap; }
 .user-toolrail button svg { flex-shrink: 0; width: 18px; }
 .user-toolrail button:hover { color: var(--user-ink); background: var(--user-surface); }
@@ -32,61 +32,99 @@
 .user-version-strip > header span { margin-left: 0; }
 .user-version-strip > div { min-width: 0; display: flex; gap: 8px; overflow-x: auto; padding: 0; }
 .user-version-strip .user-asset-thumb { width: 42px; height: 42px; flex: 0 0 42px; }
-.user-studio-controls { grid-area: settings; align-self: start; min-width: 0; display: flex; flex-direction: column; height: auto; padding: 18px; background: var(--user-paper); border: 1px solid var(--user-line); border-radius: 14px; }
-.user-studio-controls > header { padding-bottom: 13px; }
-.user-studio-controls > header > span { color: var(--user-muted); font-size: 10px; font-weight: 500; letter-spacing: 1px; }
-.user-studio-controls > header h2 { margin: 5px 0; font-size: 20px; }
-.user-studio-controls > header p { font-size: 11px; line-height: 1.6; }
+.user-studio-controls { grid-area: settings; align-self: start; min-width: 0; display: flex; flex-direction: column; height: auto; padding: 14px; background: var(--user-paper); border: 1px solid var(--user-line); border-radius: 14px; }
+.user-studio-controls > header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 9px; border-bottom: 1px solid var(--user-soft-line); }
+.user-studio-controls > header h2 { margin: 0; font-size: 17px; line-height: 22px; }
 .user-studio-fields { min-width: 0; border: 0; margin: 0; padding: 0; overflow: visible; }
 .user-studio-fields:disabled { opacity: .65; }
-.user-studio-controls .user-field { margin-top: 13px; gap: 6px; }
+.user-studio-controls .user-field { position: relative; margin-top: 8px; gap: 4px; }
+.user-studio-controls .user-field:has(> select), .user-studio-controls .user-field:has(> .user-segmented), .user-studio-controls .user-field:has(> input[type=number]) { display: grid; grid-template-columns: 70px minmax(0, 1fr); align-items: center; gap: 8px; }
+.user-studio-controls .user-field > span { font-size: 11px; line-height: 16px; }
+.user-studio-controls .user-field > .studio-field-label { gap: 0; }
+.user-studio-controls .user-field:has(> .user-segmented) > span:not(:has(.studio-info-hint)) { align-self: center; }
 .user-studio-controls .user-field > small { font-size: 10px; }
-.user-studio-controls .user-field input, .user-studio-controls .user-field select { min-height: 36px; font-size: 12px; }
-.user-studio-controls textarea { height: 86px; min-height: 72px; padding: 9px 10px; font-size: 12px; }
+.user-studio-controls .user-field input, .user-studio-controls .user-field select { min-height: 34px; font-size: 12px; }
+.user-studio-controls textarea { height: 62px; min-height: 62px; padding: 8px 10px; font-size: 12px; }
+.user-studio-controls .user-field:has(textarea) > small { position: absolute; top: 0; right: 0; }
 .studio-source-picker { display: grid; grid-template-columns: minmax(0, 1fr) 36px; gap: 7px; align-items: end; }
-.studio-source-picker > button { min-height: 36px; height: 36px; padding: 0; border-radius: 9px; }
-.user-studio-controls .user-segmented { min-height: 39px; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); border-radius: 8px; gap: 3px; }
+.studio-source-picker > button { min-height: 42px; height: 42px; padding: 0; border-radius: 8px; }
+.studio-source-choice { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 42px; padding: 5px 8px; border: 1px solid var(--user-line); border-radius: 8px; background: var(--user-paper); color: var(--user-ink); cursor: pointer; text-align: left; }
+.studio-source-choice > img, .studio-source-choice > .image-thumb-fallback { width: 30px; height: 30px; object-fit: contain; flex-shrink: 0; }
+.studio-source-choice > span { flex: 1; min-width: 0; display: grid; gap: 2px; font-size: 12px; }
+.studio-source-choice strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.studio-source-choice small { color: var(--user-muted); font-size: 10px; }
+.studio-source-picker > .user-field { min-width: 0; }
+.studio-source-choice:hover { border-color: var(--user-accent); }
+.user-studio-controls .user-segmented { min-height: 34px; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); border-radius: 8px; gap: 3px; }
 .user-studio-controls .user-segmented button { font-size: 11px; border-radius: 5px; }
 .user-studio-controls .user-segmented button.active { color: var(--user-accent); box-shadow: 0 1px 4px #243c3010; }
-.studio-tool-help { margin-top: 13px; color: var(--user-muted); font-size: 11px; }
-.studio-tool-help summary { cursor: pointer; padding-block: 3px; }
-.studio-tool-help > p { margin-top: 8px; font-size: 11px; }
-.user-studio-submit { flex-shrink: 0; margin-top: 15px; padding-top: 8px; }
-.user-studio-submit .user-quote-summary { margin: 0; padding: 4px 0 10px; }
-.user-studio-submit .user-quote-summary > strong { font-size: 23px; }
-.user-submit-operation { height: 43px; min-height: 43px; border-radius: 9px; }
-.user-submit-note { margin-top: 9px; font-size: 10px; }
+.user-studio-submit { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 14px; flex-shrink: 0; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--user-soft-line); }
+.user-studio-submit .user-quote-summary { display: grid; gap: 2px; margin: 0; padding: 0; border: 0; }
+.user-studio-submit .user-quote-summary > span { font-size: 10px; }
+.user-studio-submit .user-quote-summary > strong { font-size: 20px; line-height: 1.1; }
+.user-studio-submit .user-quote-summary small { font-size: 10px; margin-left: 4px; }
+.user-submit-operation { height: 38px; min-height: 38px; border-radius: 8px; padding: 0 12px; font-size: 12px; }
+.user-submit-operation > svg:last-child { display: none; }
+.user-submit-note, .user-studio-submit .user-maintenance-note { grid-column: 1 / -1; margin: 0; font-size: 10px; line-height: 12px; }
+.user-canvas-actions, .user-canvas-head .user-preview-actions { display: flex; align-items: center; gap: 6px; }
+.user-canvas-head { gap: 8px; flex-wrap: wrap; }
+.user-canvas-head > span { margin-right: auto; }
+.user-canvas-actions .compact, .user-canvas-head .user-icon-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; height: 32px; border-radius: 8px; font-size: 11px; }
+.user-canvas-actions .compact { padding: 0 10px; }
+.studio-field-label { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.studio-info-hint { position: relative; display: inline-flex; flex: 0 0 auto; vertical-align: middle; }
+.user-studio-controls .studio-info-hint > button, .selection-editor .studio-info-hint > button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 20px; min-height: 20px; padding: 0; border: 0; box-shadow: none; background: transparent; color: var(--studio-muted); cursor: help; }
+.studio-info-hint > [role=tooltip] { box-sizing: border-box; position: absolute; z-index: 150; top: calc(100% + 6px); right: 0; width: 228px; max-width: calc(100vw - 24px); padding: 10px 12px; border: 1px solid var(--studio-line); border-radius: 8px; background: var(--studio-paper); box-shadow: 0 6px 24px #1b1e2320; color: var(--studio-ink); font-size: 11px; line-height: 1.7; font-weight: 400; white-space: normal; visibility: hidden; opacity: 0; }
+.studio-info-hint.is-open > [role=tooltip] { visibility: visible; opacity: 1; }
+.user-studio-controls .user-preview-controls { display: grid; grid-template-columns: 70px repeat(5, minmax(0, 1fr)); align-items: center; gap: 5px; margin-top: 10px; padding-top: 10px; }
+.user-studio-controls .user-preview-controls > header { margin: 0; font-size: 11px; }
+.user-studio-controls .user-preview-controls > div { display: contents; }
+.user-studio-controls .user-preview-controls > label, .user-studio-controls .user-preview-controls > button, .user-studio-controls .user-preview-controls > div > button { gap: 0; min-width: 0; height: 30px; min-height: 30px; margin: 0; padding: 0; border-radius: 6px; font-size: 0; }
+.user-studio-controls .user-preview-controls > label > span { display: none; }
+.user-studio-controls .user-preview-controls input[type=color] { width: 18px; height: 18px; padding: 0; min-height: 0; border: 0; cursor: pointer; }
+.user-studio-controls .studio-references { margin-top: 8px; padding: 8px; }
+.user-studio-controls .studio-references > header { gap: 5px; }
+.user-studio-controls .studio-references > header > span { margin-right: auto; }
+.user-studio-controls .studio-references > div { margin-block: 6px 0; flex-wrap: nowrap; overflow-x: auto; padding: 3px 1px; }
+.user-studio-controls .studio-references > div > div, .user-studio-controls .studio-references > div > div > button:first-child { width: 36px; flex-shrink: 0; }
+.user-studio-controls .studio-references > div > div img { width: 34px; height: 34px; }
+.user-studio-controls .studio-references > div > div small { display: none; }
+.user-studio-controls .studio-commerce-fields > label.user-field:has(> select) { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.user-studio-controls .studio-commerce-fields select { padding-inline: 5px; font-size: 11px; }
+.user-studio-controls .studio-reference-empty { min-height: 26px; padding: 3px 8px; }
+.user-studio-controls .studio-reference-empty > svg { width: 16px; height: 16px; }
+.user-studio-controls .studio-reference-empty small { display: none; }
+.user-studio-controls .studio-references > .user-secondary { min-height: 30px; height: 30px; font-size: 11px; }
 .user-studio-page.preview-expanded .user-canvas-column { position: fixed; inset: 18px; z-index: 120; height: auto; min-height: 0; overflow: auto; padding-bottom: 0; box-shadow: 0 0 0 100vmax #192b2399; }
 .user-studio-page.preview-expanded .studio-preview-workspace { flex: 1; min-height: 260px; }
 @media (min-width: 761px) and (max-width: 1500px) {
   .user-toolrail { gap: 4px; }
-  .user-toolrail button { flex-direction: column; min-width: 62px; gap: 5px; padding: 7px 6px; }
+  .user-toolrail button { flex-direction: row; min-width: 62px; gap: 5px; min-height: 36px; padding: 5px 6px; }
   .user-toolrail button span { font-size: 11px; }
 }
 @media (min-width: 761px) and (max-height: 820px) {
-  .user-page-studio { padding-block: 16px; }
-  .user-studio-page .user-page-header { margin-bottom: 16px; }
+  .user-page.user-page-studio { padding-block: 12px; }
+  .user-studio-page .user-page-header { margin-bottom: 12px; }
   .user-studio-layout { gap: 12px; }
   .user-studio-controls { padding: 14px; }
-  .user-studio-controls > header > span { display: none; }
-  .user-studio-controls > header { padding-bottom: 10px; }
-  .user-studio-controls > header h2 { margin-top: 0; font-size: 19px; }
-  .user-studio-controls .user-field { position: relative; margin-top: 10px; gap: 5px; }
-  .user-studio-controls textarea { height: 68px; min-height: 68px; }
+  .user-studio-controls > header { padding-bottom: 8px; }
+  .user-studio-controls > header h2 { font-size: 17px; }
+  .user-studio-controls .user-field { margin-top: 8px; }
+  .user-studio-controls textarea { height: 48px; min-height: 48px; }
   .user-studio-controls .user-field:has(textarea) > small { position: absolute; top: 0; right: 0; }
   .user-studio-submit { margin-top: 11px; padding-top: 6px; }
-  .user-studio-submit .user-quote-summary { padding-bottom: 8px; }
+  .user-studio-submit .user-quote-summary { padding-bottom: 0; }
   .user-studio-submit .user-quote-summary > strong { font-size: 20px; }
   .user-canvas-column { min-height: max(430px, calc(100dvh - 260px)); }
 }
 @media (min-width: 961px) and (max-width: 1200px) {
-  .user-page-studio { padding-inline: 18px; }
+  .user-page.user-page-studio { padding-inline: 18px; }
   .user-studio-layout { grid-template-columns: minmax(0, 1fr) 278px; gap: 12px; }
   .user-studio-controls { padding: 15px; }
   .user-toolrail button { min-height: 46px; padding-inline: 10px; }
 }
 @media (max-width: 760px) {
-  .user-page-studio { padding: 20px 12px 30px; }
+  .user-page.user-page-studio { padding: 16px 12px 24px; }
   .user-studio-layout { grid-template-areas: "tools" "canvas" "settings"; grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .user-studio-page .user-page-header { display: flex; justify-content: space-between; margin-bottom: 16px; gap: 8px; }
   .user-studio-page .user-page-header h1 { font-size: 21px; }

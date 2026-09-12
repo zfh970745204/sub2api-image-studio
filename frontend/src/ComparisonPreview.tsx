@@ -27,7 +27,7 @@ export function ComparisonPreview({ source, result, compare, empty, sourceOverla
     const magnified = inspectable && Boolean(position);
     return <article className="studio-preview-pane" aria-label={title}>
       <header><span><i className={original ? "" : "result"} />{title}</span><small>{asset ? `${asset.width ?? "—"} × ${asset.height ?? "—"}${asset.has_alpha ? " · 透明" : ""}` : original ? "保留原始文件" : "每次生成独立版本"}</small></header>
-      <div className={`studio-preview-viewport ${backgroundClass}${sourceOverlay && original ? " is-painting" : ""}`} style={backgroundStyle}>
+      <div className={`studio-preview-viewport ${original ? "preview-transparent" : backgroundClass}${sourceOverlay && original ? " is-painting" : ""}`} style={original ? undefined : backgroundStyle}>
         {asset ? preview?.url ? <div className={`studio-image-content${magnified ? " is-inspecting" : ""}`}
           style={{ aspectRatio: String(ratio), width: `min(100cqw, ${ratio * 100}cqh)` }}
           tabIndex={inspectable ? 0 : undefined} role={inspectable ? "group" : undefined}

@@ -8,6 +8,19 @@ const result = { asset: { id: "result", width: 2400, height: 1600, has_alpha: tr
 const props = { source, result, compare: true, backgroundClass: "preview-transparent", empty: "上传图片", onError: vi.fn() };
 
 describe("source and result comparison", () => {
+  it.each([
+    ["preview-color", { backgroundColor: "#ff6633" }],
+    ["preview-image", { backgroundImage: "url(/background.png)" }],
+    ["preview-white", undefined],
+  ] as const)("applies %s to the result only", (backgroundClass, backgroundStyle) => {
+    render(<ComparisonPreview {...props} backgroundClass={backgroundClass} backgroundStyle={backgroundStyle} />);
+    const original = screen.getByRole("article", { name: "原图" }).querySelector(".studio-preview-viewport")!;
+    const output = screen.getByRole("article", { name: "处理结果" }).querySelector(".studio-preview-viewport")!;
+    expect(original).toHaveClass("preview-transparent");
+    expect(original).not.toHaveAttribute("style");
+    expect(output).toHaveClass(backgroundClass);
+    if (backgroundStyle) expect(output).toHaveStyle(backgroundStyle);
+  });
   it("keeps both images visible and moves their magnification to the same normalized position", () => {
     render(<ComparisonPreview {...props} />);
     const original = screen.getByRole("img", { name: "来源素材预览" });

@@ -64,7 +64,6 @@ body { background: #f2f3f5; }
 .user-auth-showcase h2 em { color: #e0e8ff; }
 .user-auth-showcase p { color: #f1f4fa; font-size: 14px; }
 .user-auth-caption { color: #eef2fa; font-size: 10px; }
-.user-page-studio { padding-top: 26px; }
 .user-studio-controls { box-shadow: 0 5px 20px #18212b0b; }
 .user-toolrail { box-shadow: 0 3px 16px #18212b08; }
 .user-toolrail button.active { color: #315efb; background: #edf1ff; }

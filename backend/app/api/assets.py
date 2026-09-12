@@ -19,6 +19,7 @@ from app.image_ops import ImageInputError
 from app.object_storage import ObjectStorageError
 from app.print_extraction import product_background
 from app.repositories.models import Asset, ObjectDeletionQueue
+from app.services.asset_crop import crop_asset
 from app.services.asset_files import AssetInputError, prepare_asset
 from app.services.assets import AssetService, asset_page_statement
 from app.services.configuration import runtime_config_value
@@ -33,6 +34,14 @@ AssetWriter = Annotated[Principal, Depends(require_permission("assets.write_own"
 AssetDeleter = Annotated[Principal, Depends(require_permission("assets.delete_own"))]
 AdminAssetReader = Annotated[Principal, Depends(require_permission("assets.read"))]
 AdminAssetManager = Annotated[Principal, Depends(require_permission("assets.manage"))]
+
+
+class CropRequest(BaseModel):
+    x: int = Field(ge=0, strict=True)
+    y: int = Field(ge=0, strict=True)
+    width: int = Field(ge=1, strict=True)
+    height: int = Field(ge=1, strict=True)
+    shape: Literal["rectangle", "circle"] = "rectangle"
 
 
 class QuarantineRequest(BaseModel):
@@ -366,6 +375,7 @@ async def get_selection_context(
         in {
             "cutout.smart",
             "cutout.refine",
+            "image.crop",
         }
         or (asset.operation_code == "ai.extract_print" and bool(asset.has_alpha)),
     }
@@ -479,6 +489,78 @@ async def save_selection(
         raise ApiError(422, "INVALID_SELECTION_RESULT", str(exc)) from exc
     except ObjectStorageError as exc:
         raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "修边结果保存失败，请重试") from exc
+    return {"asset": asset_payload(asset)}
+
+
+@router.post("/api/v1/assets/{asset_id}/crop", status_code=status.HTTP_201_CREATED)
+async def save_crop(
+    asset_id: uuid.UUID, payload: CropRequest, request: Request, principal: AssetWriter
+) -> dict[str, Any]:
+    database = request.app.state.runtime_services.database
+    async with database.session_factory() as session:
+        base, source_key, limited = await _selection_source(session, asset_id, principal.user_id)
+        entitlement = await entitlements.current_snapshot(
+            session, principal.user_id, request_id=getattr(request.state, "request_id", "crop-save")
+        )
+        await session.commit()
+    assert base.width is not None and base.height is not None
+    if (
+        payload.x + payload.width > base.width
+        or payload.y + payload.height > base.height
+        or (payload.shape == "circle" and payload.width != payload.height)
+    ):
+        raise ApiError(422, "INVALID_CROP", "裁切区域必须位于图片内，圆形的宽高必须相同")
+    max_mp = min(
+        16,
+        entitlement.max_image_megapixels,
+        int(
+            await runtime_config_value(
+                request.app.state.runtime_services,
+                "general",
+                "max_image_megapixels",
+                request.app.state.settings.max_image_megapixels,
+            )
+        ),
+    )
+    storage = _storage(request)
+    try:
+        raw = await storage.get_object(base.object_key)
+        prepared = await asyncio.to_thread(
+            crop_asset,
+            raw,
+            **payload.model_dump(),
+            expected_size=(base.width, base.height),
+            max_megapixels=max_mp,
+        )
+        if source_key == base.object_key:
+            restoration = prepared
+        else:
+            source_raw = await storage.get_object(source_key)
+            restoration = await asyncio.to_thread(
+                crop_asset,
+                source_raw,
+                **payload.model_dump(),
+                expected_size=(base.width, base.height),
+                max_megapixels=max_mp,
+            )
+        asset = await service.store(
+            database,
+            storage,
+            owner_id=principal.user_id,
+            prepared=prepared,
+            edit_source=restoration,
+            kind="result",
+            operation_code="image.crop",
+            parent_asset_id=base.id,
+            retention_days=entitlement.retention_days,
+            original_filename="crop.png",
+            metadata={"crop": payload.model_dump(), "edit_restore_limited": limited},
+            request_id=getattr(request.state, "request_id", "crop-save"),
+        )
+    except AssetInputError as exc:
+        raise ApiError(422, "INVALID_CROP", str(exc)) from exc
+    except ObjectStorageError as exc:
+        raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "裁切结果保存失败，请重试") from exc
     return {"asset": asset_payload(asset)}
 
 

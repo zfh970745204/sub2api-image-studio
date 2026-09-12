@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, selectionPixels, type Asset, type SelectionContext } from "./user-api";
+import { api, type Asset, type SelectionContext } from "./user-api";
+import { createSelectionLoader, type SelectionLoader } from "./selection-loader";
+import { InfoHint } from "./InfoHint";
 import type { SelectionCommand, SelectionReply } from "./background-selection.worker";
 import "./background-selection.css";
 
@@ -10,7 +12,10 @@ const MAX_ZOOM = 8;
 const ZOOM_PRESETS = [.25, .5, 1, 1.5, 2, 4, 8];
 const zoomLabel = (value: number) => `${Math.round(value * 1000) / 10}%`;
 
-export function BackgroundSelectionEditor({ asset, previewUrl, onClose, onSaved }: { asset: Asset; previewUrl?: string | null; onClose: () => void; onSaved: (asset: Asset) => void }) {
+export function BackgroundSelectionEditor({ asset, loader, previewUrl, onClose, onSaved }: { asset: Asset; loader?: SelectionLoader; previewUrl?: string | null; onClose: () => void; onSaved: (asset: Asset) => void }) {
+  const ownLoader = useMemo(createSelectionLoader, []);
+  const imageLoader = loader || ownLoader;
+  const [earlySource, setEarlySource] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const sourceCanvas = useRef<HTMLCanvasElement>(null);
   const overlayCanvas = useRef<HTMLCanvasElement>(null);
@@ -129,9 +134,9 @@ export function BackgroundSelectionEditor({ asset, previewUrl, onClose, onSaved 
 
   useEffect(() => {
     let alive = true;
-    const abort = new AbortController();
+    let sourceObjectUrl: string | null = null;
     let instance: Worker | null = null;
-    setError(""); setContext(null); setFrame(null); setProcessing(true); setDirty(false);
+    setError(""); setContext(null); setFrame(null); setEarlySource(null); setProcessing(true); setDirty(false);
     setEdge(0); setTuning(false); setZoom(1); zoomRef.current = 1; zoomAnchor.current = null;
     setFailedPreview(null); queued.current = null; working.current = true;
     for (const viewport of [sourceViewport.current, resultViewport.current]) if (viewport) { viewport.scrollLeft = 0; viewport.scrollTop = 0; }
@@ -177,20 +182,25 @@ export function BackgroundSelectionEditor({ asset, previewUrl, onClose, onSaved 
           if (nextCommand) instance?.postMessage(nextCommand);
           else { working.current = false; setProcessing(false); }
         };
-        const next = await api.selection(asset.id);
+        if (retry) imageLoader.clear();
+        const layers = imageLoader.load(asset.id);
+        const next = await layers.context;
         if (!alive) return;
         setContext(next);
         const [source, result] = await Promise.all([
-          selectionPixels(next.source_url, abort.signal),
-          next.source_url === next.result_url ? undefined : selectionPixels(next.result_url, abort.signal),
+          layers.source.then((blob) => {
+            if (alive) { sourceObjectUrl = URL.createObjectURL(blob); setEarlySource(sourceObjectUrl); }
+            return blob;
+          }),
+          layers.result,
         ]);
         if (!alive) return;
         instance.postMessage({ type: "init", source, result, width: next.width, height: next.height, hasSelection: next.has_initial_selection } satisfies SelectionCommand);
       } catch (reason) { if (alive) fail(reason instanceof Error ? reason.message : "修边图片读取失败"); }
     }
     void load();
-    return () => { alive = false; abort.abort(); window.clearTimeout(timer.current); instance?.terminate(); worker.current = null; };
-  }, [asset.id, retry]);
+    return () => { alive = false; if (!loader) ownLoader.clear(); if (sourceObjectUrl) URL.revokeObjectURL(sourceObjectUrl); window.clearTimeout(timer.current); instance?.terminate(); worker.current = null; };
+  }, [asset.id, retry, imageLoader, loader, ownLoader]);
 
   function send(command: SelectionCommand) {
     if (!worker.current || savingRef.current) return;
@@ -210,7 +220,7 @@ export function BackgroundSelectionEditor({ asset, previewUrl, onClose, onSaved 
   const disabled = !frame || processing || tuning || saving;
 
   return createPortal(<dialog ref={dialog} className="selection-editor" aria-labelledby="selection-editor-title" onCancel={(event) => { event.preventDefault(); close(); }}>
-    <header><div><small>BACKGROUND SELECTION</small><h2 id="selection-editor-title">选区修边</h2><p>红色区域将被删除。点击补选残留，切换“保留”取消误选。</p></div><button type="button" className="selection-close" aria-label="关闭选区修边" disabled={saving} onClick={close}>×</button></header>
+    <header><div><h2 id="selection-editor-title">选区修边</h2><InfoHint label="选区修边使用说明">红色区域将被删除，切换“保留”取消误选。容差会重新计算上次点击的范围；取消“只选相连区域”可选全图同色区域。滚轮同步缩放，预览底色只影响右侧。手动修边不扣积分。</InfoHint></div><button type="button" autoFocus className="selection-close" aria-label="关闭选区修边" disabled={saving} onClick={close}>×</button></header>
     {context?.restore_limited && <p className="selection-warning">这张历史结果未保留去底前的印花原图。可以继续清理残留，但已丢失的像素无法恢复；重新提取后的结果支持恢复。</p>}
     <div className="selection-toolbar">
       <div className="selection-modes" role="group" aria-label="选区操作"><button type="button" aria-pressed={mode === "remove"} disabled={!frame || saving} onClick={() => setMode("remove")}>＋ 删除背景</button><button type="button" aria-pressed={mode === "restore"} disabled={!frame || saving} onClick={() => setMode("restore")}>－ 保留 / 取消误选</button></div>
@@ -224,7 +234,7 @@ export function BackgroundSelectionEditor({ asset, previewUrl, onClose, onSaved 
     </div>
     <div className={`selection-panes selection-bg-${background}`} aria-busy={!frame}>
       <section><h3>选区 · {mode === "remove" ? "点击删除背景" : "点击保留内容"}</h3><div ref={sourceViewport} className="selection-viewport" aria-label="选区画布" onScroll={(event) => syncScroll(event.currentTarget, resultViewport.current)}><div ref={sourceImage} className="selection-image" data-ready={Boolean(frame)} style={{ width: fitWidth * zoom, aspectRatio: `${imageWidth}/${imageHeight}` }}>
-        {!frame && <div className="selection-placeholder">{processing ? "正在载入原尺寸图片…" : "原图尚未载入"}</div>}
+        {!frame && (earlySource ? <img className="selection-loading-preview" src={earlySource} alt="去底前原图预览" /> : <div className="selection-placeholder">{processing ? "正在载入原尺寸图片…" : "原图尚未载入"}</div>)}
         <canvas ref={sourceCanvas} aria-label="去底前原图" /><canvas ref={overlayCanvas} className="selection-overlay" style={{ opacity: showSelection ? 1 : 0 }} aria-label="点击图片编辑背景选区" onPointerDown={(event) => {
         if (disabled || event.button !== 0 || !context) return;
         const rect = event.currentTarget.getBoundingClientRect();
@@ -242,8 +252,6 @@ export function BackgroundSelectionEditor({ asset, previewUrl, onClose, onSaved 
       </select></label>
       <button type="button" aria-label="放大修边预览" disabled={zoom >= MAX_ZOOM} onClick={() => changeZoom(zoomRef.current * 1.25)}>＋</button>
     </div><label>预览底色 <select aria-label="修边预览底色" value={background} onChange={(event) => setBackground(event.target.value)}><option value="checker">透明棋盘格</option><option value="white">白色</option><option value="dark">黑色</option></select></label><span role="status">{saving ? "正在保存原尺寸 PNG…" : processing || tuning ? frame ? "正在更新选区与预览…" : "正在载入原图与智能选区…" : context && frame ? `${context.width} × ${context.height} · 已选 ${Math.round(frame.removed / (context.width * context.height) * 1000) / 10}%` : "载入未完成"}</span></div>
-    <p className="selection-hint">在任一画布内滚动滚轮，以指针为中心同步缩放；拖动滚动条平移。缩放和预览底色不影响保存尺寸。</p>
-    <p className="selection-hint">{frame?.canRetune ? "拖动容差会重新计算上次点击的范围，不会累积误删。" : "先显示已有抠图选区；原图会尝试识别相连的单色外围背景。"} 取消“只选相连区域”可一次选中全图同色区域，请检查图案内部。细边可尝试收缩 1 像素。</p>
     {error && <p role="alert" className="selection-error">{error} {!frame && <button type="button" onClick={() => setRetry((n) => n + 1)}>重新载入</button>}</p>}
     {confirmClose && <div className="selection-warning">修边尚未保存。<button type="button" onClick={() => setConfirmClose(false)}>继续修边</button><button type="button" onClick={onClose}>放弃修改并关闭</button></div>}
     <footer><span>手动修边不扣积分 · 原图保留 · 另存新版本</span><button type="button" disabled={disabled || !frame?.visible} onClick={() => { if (working.current || savingRef.current || tuning) return; setSaving(true); savingRef.current = true; setError(""); worker.current?.postMessage({ type: "export" } satisfies SelectionCommand); }}>保存修边结果</button></footer>

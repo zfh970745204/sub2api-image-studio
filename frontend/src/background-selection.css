@@ -2,8 +2,9 @@
 .selection-editor { box-sizing: border-box; width: min(1220px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--studio-line); border-radius: var(--studio-panel-radius); color: var(--studio-ink); background: var(--studio-paper); box-shadow: 0 24px 90px color-mix(in srgb, var(--studio-ink) 25%, transparent); font-family: inherit; }
 .selection-editor::backdrop { background: color-mix(in srgb, var(--studio-ink) 60%, transparent); }
 .selection-editor header { display: flex; justify-content: space-between; gap: 20px; }
+.selection-editor header > div { display: flex; align-items: center; gap: 8px; padding-bottom: 12px; }
 .selection-editor header small { color: var(--studio-muted); letter-spacing: .14em; font-size: 10px; }
-.selection-editor h2 { margin: 6px 0; font-size: 24px; }
+.selection-editor h2 { margin: 0; font-size: 19px; }
 .selection-editor p { line-height: 1.6; font-size: 13px; }
 .selection-editor header p { color: var(--studio-muted); }
 .selection-editor button, .selection-editor select { background: var(--studio-paper); color: var(--studio-ink); border: 1px solid var(--studio-line); border-radius: var(--studio-control-radius); padding: 8px 10px; font: inherit; font-size: 12px; cursor: pointer; }
@@ -11,7 +12,7 @@
 .selection-editor button:disabled, .selection-editor input:disabled, .selection-editor select:disabled { opacity: .45; cursor: default; }
 .selection-editor button:focus-visible, .selection-editor select:focus-visible, .selection-editor input:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
 .selection-editor .selection-close { align-self: flex-start; font-size: 24px; padding: 2px 11px; }
-.selection-toolbar, .selection-secondary, .selection-view-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px 0; font-size: 12px; }
+.selection-toolbar, .selection-secondary, .selection-view-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 9px 0; font-size: 12px; }
 .selection-toolbar { border-top: 1px solid var(--studio-soft-line); }
 .selection-toolbar label, .selection-secondary label, .selection-view-controls label { display: flex; align-items: center; gap: 6px; }
 .selection-toolbar input { accent-color: var(--studio-accent); }
@@ -26,8 +27,8 @@
 .selection-panes section { min-width: 0; border: 1px solid var(--studio-line); border-radius: var(--studio-panel-radius); overflow: hidden; }
 .selection-panes h3 { font-size: 12px; margin: 0; padding: 12px 14px; background: var(--studio-surface); }
 .selection-viewport { height: clamp(220px, 36vh, 500px); overflow: auto; overscroll-behavior: none; scrollbar-gutter: stable; background-color: var(--studio-line); background-image: conic-gradient(var(--studio-canvas) 25%, transparent 0 50%, var(--studio-canvas) 0 75%, transparent 0); background-size: 20px 20px; }
-.selection-bg-white .selection-viewport { background: var(--studio-paper); }
-.selection-bg-dark .selection-viewport { background: var(--studio-ink); }
+.selection-bg-white section:last-child .selection-viewport { background: var(--studio-paper); }
+.selection-bg-dark section:last-child .selection-viewport { background: var(--studio-ink); }
 .selection-image { position: relative; margin: 0 auto; }
 .selection-image canvas, .selection-loading-preview { display: block; position: absolute; width: 100%; height: 100%; inset: 0; }
 .selection-image[data-ready=false] canvas { visibility: hidden; }

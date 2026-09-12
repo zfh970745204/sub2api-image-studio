@@ -8,6 +8,11 @@ vi.mock("./BackgroundSelectionEditor", () => ({
     <div role="dialog" aria-label="选区修边"><span>修边素材 {asset.id}</span><button onClick={() => onSaved({ ...asset, id: "refined-1", parent_asset_id: asset.id, operation_code: "cutout.refine" })}>测试保存修边</button></div>,
 }));
 
+vi.mock("./CropEditor", () => ({
+  CropEditor: ({ asset, onSaved }: { asset: Asset; onSaved: (value: Asset) => void }) =>
+    <div role="dialog" aria-label="裁切图片"><button onClick={() => onSaved({ ...asset, id: "cropped-1", parent_asset_id: asset.id, operation_code: "image.crop" })}>测试保存裁切</button></div>,
+}));
+
 const bootstrap = {
   user: { id: "user-1", display_name: "测试用户", email: "member@example.test" },
   permissions: ["studio.use", "tasks.create"],
@@ -145,7 +150,7 @@ describe("Studio task workflow", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "开始创作" })).toBeEnabled());
     expect(screen.getByRole("button", { name: "透明背景" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("combobox", { name: "输出尺寸" })).toHaveValue("2048x2048");
-    fireEvent.click(screen.getByRole("button", { name: "原产品底色（不透明）" }));
+    fireEvent.click(screen.getByRole("button", { name: "不透明" }));
     fireEvent.change(screen.getByLabelText("自定义背景色"), { target: { value: "#245eaa" } });
     fireEvent.change(screen.getByRole("combobox", { name: "输出尺寸" }), { target: { value: "2048x3072" } });
     fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
@@ -168,7 +173,7 @@ describe("Studio task workflow", () => {
     window.history.replaceState({}, "", "/app/studio?job=job-1");
     render(<UserApp />);
     await screen.findByRole("img", { name: "图片任务结果" });
-    expect(screen.getByRole("button", { name: "原产品底色（不透明）" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "不透明" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("combobox", { name: "输出尺寸" })).toHaveValue("3072x2048");
     expect(screen.getByLabelText("自定义背景色")).toHaveValue("#e8c7b5");
     expect(fetchMock.mock.calls.some(([url]) => url.includes("/print-background"))).toBe(false);
@@ -209,6 +214,24 @@ describe("Studio task workflow", () => {
     await waitFor(() => expect(screen.getByTitle("查看积分流水")).toHaveTextContent("180"));
   });
 
+  it.each(["ai.generate", "ai.extract_print"])("uses the saved crop for the next %s task without charging for cropping", async (operation) => {
+    restoredJob = { ...job, operation_code: operation, source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: { prompt: "复古图案" } };
+    events.mockImplementation(async () => response({ job: restoredJob }));
+    window.history.replaceState({}, "", "/app/studio?job=job-1");
+    render(<UserApp />);
+    await screen.findByRole("img", { name: "图片任务结果" });
+    fireEvent.click(screen.getByRole("button", { name: "裁切" }));
+    fireEvent.click(screen.getByRole("button", { name: "测试保存裁切" }));
+    expect(await screen.findByText(/裁切已保存为新版本，未扣积分/)).toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/quote"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
+    await screen.findByRole("dialog", { name: "任务报价" });
+    const posted = JSON.parse(String(fetchMock.mock.calls.find(([url]) => url === "/api/v1/jobs/quote")![1]?.body));
+    expect(posted.source_asset_id).toBe("cropped-1");
+    if (operation === "ai.generate") expect(posted.parameters.reference_asset_ids).toContain("cropped-1");
+  });
+
   it("shows a request ID for server failures without discarding the quote", async () => {
     submit.mockResolvedValueOnce(response({ code: "IMAGE_JOB_SAVE_FAILED", message: "任务保存失败，本次提交未扣费", request_id: "req-test-123" }, 500));
     const dialog = await prepare();
@@ -233,12 +256,13 @@ describe("Studio task workflow", () => {
     fireEvent.click(within(await screen.findByRole("dialog", { name: "任务报价" })).getByRole("button", { name: "确认提交" }));
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "查看任务 job-1" })).toHaveTextContent("执行中");
-    expect(screen.getByRole("button", { name: "查看任务 job-2" })).toHaveTextContent("排队中");
+    expect(screen.queryByRole("button", { name: /查看任务 job-/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("本次任务")).not.toBeInTheDocument();
+    const balanceReads = fetchMock.mock.calls.filter(([url]) => url === "/api/v1/points/balance").length;
     events.mockImplementation(async () => response({ job: { ...job, status: "succeeded", output_asset_id: result.id } }));
-    // Change tools to detach the second job too; the first keeps its own status row.
+    // Both jobs keep polling invisibly; completion refreshes balance without replacing the draft.
     fireEvent.click(screen.getByRole("button", { name: "高清重绘" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "查看任务 job-1" })).toHaveTextContent("已完成"), { timeout: 4500 });
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === "/api/v1/points/balance").length).toBeGreaterThan(balanceReads), { timeout: 4500 });
     expect(screen.queryByRole("img", { name: "图片任务结果" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /补充要求/ })).toHaveValue("第二张：花朵");
   });

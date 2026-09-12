@@ -177,6 +177,8 @@ export interface Asset {
   updated_at: string;
 }
 
+export interface CropOptions { x: number; y: number; width: number; height: number; shape: "rectangle" | "circle" }
+
 export interface SelectionContext {
   width: number;
   height: number;
@@ -338,7 +340,8 @@ export const api = {
       `/api/v1/assets?${pageQuery({ ...page, kind })}`,
     ),
   asset: (id: string) => request<{ asset: Asset }>(`/api/v1/assets/${id}`),
-  selection: (id: string) => request<SelectionContext>(`/api/v1/assets/${id}/selection`),
+  selection: (id: string, signal?: AbortSignal) => request<SelectionContext>(`/api/v1/assets/${id}/selection`, { signal }),
+  crop: (id: string, options: CropOptions) => request<{ asset: Asset }>(`/api/v1/assets/${id}/crop`, { method: "POST", body: JSON.stringify(options) }),
   saveSelection: (id: string, image: Blob) => {
     const body = new FormData();
     body.append("image", image, "selection-refined.png");
