@@ -177,6 +177,24 @@ export interface Asset {
   updated_at: string;
 }
 
+export interface SelectionContext {
+  width: number;
+  height: number;
+  restore_limited: boolean;
+  has_initial_selection: boolean;
+  source_url: string;
+  result_url: string;
+}
+
+export async function selectionPixels(url: string, signal: AbortSignal) {
+  const response = await fetch(url, { signal, credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || "修边图片读取失败，请重试");
+  }
+  return response.blob();
+}
+
 export interface PointTransaction {
   id: string;
   entry_type: string;
@@ -320,6 +338,12 @@ export const api = {
       `/api/v1/assets?${pageQuery({ ...page, kind })}`,
     ),
   asset: (id: string) => request<{ asset: Asset }>(`/api/v1/assets/${id}`),
+  selection: (id: string) => request<SelectionContext>(`/api/v1/assets/${id}/selection`),
+  saveSelection: (id: string, image: Blob) => {
+    const body = new FormData();
+    body.append("image", image, "selection-refined.png");
+    return request<{ asset: Asset }>(`/api/v1/assets/${id}/selection`, { method: "POST", body });
+  },
   printBackground: (id: string, point?: { x: number; y: number }) =>
     request<{ color: string; confidence: number; method: string }>(`/api/v1/assets/${id}/print-background${point ? `?x=${point.x}&y=${point.y}` : ""}`),
   lineage: (id: string) => request<{ items: Asset[] }>(`/api/v1/assets/${id}/lineage`),

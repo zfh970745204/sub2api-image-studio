@@ -7,6 +7,7 @@ import { estimatedPoints, jobOutputIds, downloadJob, uploadAssets } from "./user
 import { BusyDialog } from "./BusyDialog";
 import { usePageVisible } from "./usePageVisible";
 import { PrintBackgroundControls } from "./PrintBackgroundControls";
+import { BackgroundSelectionEditor } from "./BackgroundSelectionEditor";
 import {
   AlertCircle,
   ArrowRight,
@@ -215,6 +216,7 @@ function formatBytes(value: number): string {
 
 function operationName(code: string): string {
   if (code === "upload") return "上传原图";
+  if (code === "cutout.refine") return "选区修边";
   return OPERATION_META[code]?.label || code;
 }
 
@@ -771,6 +773,7 @@ function StudioPage({
   const [notice, setNotice] = useState("");
   const [activeJob, setActiveJob] = useState<ImageJob | null>(null);
   const [resultAsset, setResultAsset] = useState<Asset | null>(null);
+  const [selectionAsset, setSelectionAsset] = useState<Asset | null>(null);
   const [lineage, setLineage] = useState<Asset[]>([]);
   const [previewMode, setPreviewMode] = useState<"transparent" | "white" | "dark" | "color" | "image">("transparent");
   const [previewColor, setPreviewColor] = useState("#e8c7b5");
@@ -819,6 +822,11 @@ function StudioPage({
   const compareSource = meta.source || (isGeneration && Boolean(sourceId));
   const source = assets.find((item) => item.id === sourceId) || null;
   const displayAsset = resultAsset || (compareSource ? source : null);
+  const refinementTarget = resultAsset || source;
+  const canRefine = refinementTarget && ["original", "result"].includes(refinementTarget.kind) && (
+    operationCode === "cutout.smart" || (operationCode === "ai.extract_print" && resultAsset) ||
+    ["cutout.smart", "cutout.refine", "ai.extract_print"].includes(refinementTarget.operation_code)
+  );
   const sourceUrl = useSignedAssetUrl(compareSource ? source?.id || null : null, previewRevision, (reason) => setError(messageOf(reason, "原图预览地址获取失败")));
   const resultUrl = useSignedAssetUrl(resultAsset?.id || null, previewRevision, (reason) => setError(messageOf(reason, "结果预览地址获取失败")));
   const needsMask = operationCode === "ai.repair" || operationCode === "ai.text_fix";
@@ -1137,7 +1145,7 @@ function StudioPage({
           <header className="user-canvas-head">
             <span><FileImage size={17} /><strong>{compareSource ? "原图与结果" : "创作预览"}</strong></span>
             <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{(source || resultAsset) && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
-            {resultAsset && <div className="user-canvas-actions"><button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button></div>}
+            <div className="user-canvas-actions">{canRefine && <button className="user-secondary compact" disabled={Boolean(busy) || jobRunning} onClick={() => setSelectionAsset(refinementTarget)} type="button"><Brush size={16} />选区修边</button>}{resultAsset && <button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button>}</div>
           </header>
           <ComparisonPreview key={`${sourceId}:${resultAsset?.id}:${operationCode}`} compare={compareSource} source={source ? { asset: source, url: sourceUrl } : null} result={resultAsset ? { asset: resultAsset, url: resultUrl } : null}
             backgroundClass={`preview-${previewMode}`} backgroundStyle={previewStyle}
@@ -1191,7 +1199,8 @@ function StudioPage({
           {needsMask && <div className="user-field"><span>修改区域</span><p className="user-mask-hint">直接在预览图上涂抹。也可上传与原图同尺寸的 PNG，透明区域表示需要修改的部分。</p><button className={maskId ? "user-file-ready" : "user-file-input"} onClick={() => maskRef.current?.click()} type="button">{maskId ? <Check size={17} /> : <Brush size={17} />}{maskId ? "遮罩已就绪 · 点击替换" : "上传透明 PNG 遮罩"}</button><input accept="image/png" hidden onChange={(event) => { setMaskRevision((value) => value + 1); void uploadMask(event.target.files?.[0]); }} ref={maskRef} type="file" /></div>}
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
-          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>先确认衣服、杯子等产品的底色。透明背景会尽量去除外围底色，保留图案细节，建议在同色产品上使用；图案内部与底色相同的区域会保守保留。原产品底色模式保留平整底色，不保留产品外形、布料纹理和褶皱。两种模式均输出 PNG；有多个图案时，可在补充要求中指定提取区域。</p></details>}
+          {operationCode === "cutout.smart" && <p className="user-mask-hint">自动抠图后，点击画布上方“选区修边”检查红色删除区域。可补选残留、取消误选、调整容差并实时预览；手动修边不扣积分。单色底原图也可直接进入修边。</p>}
+          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>先确认产品底色。透明模式去除底色后，可通过“选区修边”补选图案内部残留、取消误选并检查细边；修边不扣积分。原产品底色模式输出平整底色，不保留产品外形、纹理和褶皱；进入修边并删除背景后会另存透明 PNG。两种模式均保留原结果。有多个图案时，可在补充要求中指定提取区域。</p></details>}
           {operationCode === "ai.redraw" && <details className="studio-tool-help"><summary>高清重绘与印花提取的区别</summary><p>重绘只提升清晰度，保留主体、背景与构图。需要去除产品、单独还原图案，请使用“印花提取”。</p></details>}
           {resultAsset?.has_alpha && <details className="studio-tool-help"><summary>预览背景（不影响导出）</summary><PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} /></details>}
           </fieldset>
@@ -1204,6 +1213,11 @@ function StudioPage({
           </div>
         </aside>
       </div>
+      {selectionAsset && <BackgroundSelectionEditor key={selectionAsset.id} asset={selectionAsset} onClose={() => setSelectionAsset(null)} onSaved={(saved) => {
+        setSelectionAsset(null); setActiveJob(null); setBatchResults([]); setResultAsset(saved);
+        setAssets((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+        setQuote(null); setError(""); setNotice("修边已保存为新版本，未扣积分。可继续修边或下载透明 PNG。");
+      }} />}
       {quote && <QuoteDialog balance={bootstrap.points.balance} busy={busy === "submit"} error={error} operation={selectedOperation} quote={quote} parameters={quoteParameters.current} onCancel={() => { if (!submitting.current) setQuote(null); }} onConfirm={() => void submitJob()} />}
     </div>
   );

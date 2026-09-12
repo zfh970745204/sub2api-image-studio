@@ -16,8 +16,6 @@ from app.domain.print_extraction import print_options
 from app.image_ops import (
     ImageInputError,
     apply_color_effect,
-    has_chroma_key_background,
-    remove_solid_background,
     upscale,
     validate_edit_mask,
     vectorize_artwork,
@@ -34,6 +32,7 @@ from app.services.configuration import (
 from app.services.cutout_process import BackgroundRemovalRunner
 from app.services.jobs import ClaimedJob, PermanentJobError, RetryableJobError
 from app.services.security import SecurityService
+from app.smart_cutout import prepare_smart_cutout
 from app.sub2api import Sub2APIClient, Sub2APIError
 
 AI_EDIT_PROMPTS = {
@@ -133,6 +132,14 @@ class ImageJobExecutor:
             async for output, extension, provider_request_id, metadata in self._outputs(
                 claim, source_data
             ):
+                edit_source_data = metadata.pop("_edit_source_data", None)
+                edit_source = (
+                    await asyncio.to_thread(
+                        prepare_asset, edit_source_data, kind="original", max_megapixels=200
+                    )
+                    if edit_source_data is not None
+                    else None
+                )
                 prepared = await asyncio.to_thread(
                     prepare_asset,
                     output,
@@ -144,6 +151,7 @@ class ImageJobExecutor:
                     self.storage,
                     owner_id=claim.user_id,
                     prepared=prepared,
+                    edit_source=edit_source,
                     kind="vector" if prepared.extension == "svg" else "result",
                     operation_code=claim.operation_code,
                     retention_days=claim.retention_days,
@@ -347,6 +355,7 @@ class ImageJobExecutor:
                         **metadata,
                         "revised_prompt": upstream.revised_prompt,
                         "workflow": "product-color-print-extraction",
+                        "_edit_source_data": upstream.data,
                     },
                 )
             return (
@@ -357,8 +366,9 @@ class ImageJobExecutor:
             )
         if operation == "cutout.smart":
             self._require_source(source)
-            if await asyncio.to_thread(has_chroma_key_background, source):
-                output, metadata = await asyncio.to_thread(remove_solid_background, source)
+            prepared = await asyncio.to_thread(prepare_smart_cutout, source)
+            if prepared is not None:
+                output, metadata = prepared
             else:
                 await self._progress(claim, 30)
                 output = await self.background_remover.remove(source)
@@ -368,7 +378,7 @@ class ImageJobExecutor:
                     "inference_threads": self.settings.background_model_threads,
                 }
             await self._progress(claim, 80)
-            return output, "png", None, metadata
+            return output, "png", None, {**metadata, "_edit_source_data": source}
         if operation in {"upscale.2x", "upscale.4x"}:
             self._require_source(source)
             scale = 2 if operation.endswith("2x") else 4

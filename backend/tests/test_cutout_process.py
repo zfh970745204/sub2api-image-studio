@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 from sqlalchemy import func, select, update
 from test_assets import asset_context as asset_fixture
 from test_assets import client_for, login, raster_bytes, seed_user, upload
@@ -194,7 +195,15 @@ async def test_cutout_process_job_publishes_or_refunds_once(
         await session.commit()
     async with client_for(asset_context, "cutout-owner") as client:
         await login(client, owner.email)
-        asset = (await upload(client, raster_bytes())).json()["asset"]
+        # A varied photo-like source must reach the native process. Flat artwork
+        # is deliberately handled without asking the model to select a subject.
+        photo = Image.new("RGB", (64, 64))
+        for x in range(64):
+            for y in range(64):
+                photo.putpixel((x, y), (x * 4, y * 4, 120))
+        source = BytesIO()
+        photo.save(source, "PNG")
+        asset = (await upload(client, source.getvalue())).json()["asset"]
         quoted = await client.post(
             "/api/v1/jobs/quote",
             json={"operation_code": "cutout.smart", "source_asset_id": asset["id"]},
@@ -211,7 +220,8 @@ async def test_cutout_process_job_publishes_or_refunds_once(
 
     original = asyncio.create_subprocess_exec
     processes = []
-    output = raster_bytes(mode="RGBA")
+    # The cutout contract preserves source dimensions, including its restoration source.
+    output = raster_bytes(mode="RGBA", size=photo.size)
 
     async def launch(*args, **kwargs):
         script = {

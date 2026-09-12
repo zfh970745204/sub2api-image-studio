@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from io import BytesIO
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
+from PIL import Image
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, func, select
 
@@ -307,6 +309,165 @@ async def get_print_background(
         raise ApiError(
             422, "PRODUCT_COLOR_UNAVAILABLE", "无法识别此处的底色，请手动选色或换个位置取色。"
         ) from exc
+
+
+async def _selection_source(session, asset_id: uuid.UUID, owner_id: uuid.UUID):
+    asset = await service.require_usable(session, asset_id, owner_id=owner_id)
+    if asset.kind not in {"original", "result"} or asset.mime_type not in {
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+    }:
+        raise ApiError(422, "INVALID_SELECTION_SOURCE", "请使用原图或图片结果进行选区修边")
+    if not asset.width or not asset.height or asset.width * asset.height > 16_000_000:
+        raise ApiError(
+            422, "SELECTION_IMAGE_TOO_LARGE", "选区修边支持最高 1600 万像素，请先缩小图片"
+        )
+    if asset.asset_metadata.get("edit_source_ready"):
+        return (
+            asset,
+            service.edit_source_key(asset.object_key),
+            bool(asset.asset_metadata.get("edit_restore_limited", False)),
+        )
+    # Only a cutout's parent has matching geometry. A product photo is never a
+    # restoration source for an extracted print, even if the dimensions match.
+    if asset.operation_code == "cutout.smart" and asset.parent_asset_id:
+        try:
+            parent = await service.require_usable(session, asset.parent_asset_id, owner_id=owner_id)
+        except ApiError:
+            parent = None
+        if parent and (parent.width, parent.height) == (asset.width, asset.height):
+            return asset, parent.object_key, False
+    return asset, asset.object_key, bool(asset.has_alpha and asset.kind == "result")
+
+
+@router.get("/api/v1/assets/{asset_id}/selection")
+async def get_selection_context(
+    asset_id: uuid.UUID, request: Request, principal: AssetReader
+) -> dict[str, Any]:
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        asset, _, limited = await _selection_source(session, asset_id, principal.user_id)
+    return {
+        "width": asset.width,
+        "height": asset.height,
+        "restore_limited": limited,
+        "source_url": f"/api/v1/assets/{asset_id}/selection/source",
+        "result_url": f"/api/v1/assets/{asset_id}/selection/result",
+        "has_initial_selection": asset.operation_code
+        in {
+            "cutout.smart",
+            "cutout.refine",
+        }
+        or (asset.operation_code == "ai.extract_print" and bool(asset.has_alpha)),
+    }
+
+
+@router.get("/api/v1/assets/{asset_id}/selection/{layer}")
+async def get_selection_pixels(
+    asset_id: uuid.UUID,
+    layer: Literal["source", "result"],
+    request: Request,
+    principal: AssetReader,
+) -> Response:
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        asset, source_key, _ = await _selection_source(session, asset_id, principal.user_id)
+        key = source_key if layer == "source" else asset.object_key
+    try:
+        raw = await _storage(request).get_object(key)
+        # Canonical PNG also applies EXIF orientation for legacy JPEG parents.
+        prepared = await asyncio.to_thread(prepare_asset, raw, kind="original", max_megapixels=16)
+    except ObjectStorageError as exc:
+        raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "修边图片暂时无法读取，请重试") from exc
+    except AssetInputError as exc:
+        raise ApiError(422, "INVALID_SELECTION_SOURCE", str(exc)) from exc
+    return Response(
+        prepared.data, media_type="image/png", headers={"Cache-Control": "private, no-store"}
+    )
+
+
+def _validate_selection_result(raw: bytes, width: int, height: int, max_megapixels: int):
+    prepared = prepare_asset(raw, kind="mask", max_megapixels=max_megapixels)
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n") or (prepared.width, prepared.height) != (
+        width,
+        height,
+    ):
+        raise AssetInputError("请保存与原图尺寸一致的透明通道 PNG，不能缩放或裁切")
+    with Image.open(BytesIO(prepared.data)) as image:
+        if image.getchannel("A").getbbox() is None:
+            raise AssetInputError("不能保存完全透明的图片，请取消部分选区以保留图案")
+    return prepared
+
+
+@router.post("/api/v1/assets/{asset_id}/selection", status_code=status.HTTP_201_CREATED)
+async def save_selection(
+    asset_id: uuid.UUID,
+    request: Request,
+    principal: AssetWriter,
+    image: Annotated[UploadFile, File()],
+) -> dict[str, Any]:
+    database = request.app.state.runtime_services.database
+    async with database.session_factory() as session:
+        base, source_key, limited = await _selection_source(session, asset_id, principal.user_id)
+        entitlement = await entitlements.current_snapshot(
+            session,
+            principal.user_id,
+            request_id=getattr(request.state, "request_id", "selection-save"),
+        )
+        await session.commit()
+    max_mb = min(
+        entitlement.max_upload_mb,
+        int(
+            await runtime_config_value(
+                request.app.state.runtime_services,
+                "general",
+                "max_upload_mb",
+                request.app.state.settings.max_upload_mb,
+            )
+        ),
+    )
+    max_mp = min(
+        16,
+        entitlement.max_image_megapixels,
+        int(
+            await runtime_config_value(
+                request.app.state.runtime_services,
+                "general",
+                "max_image_megapixels",
+                request.app.state.settings.max_image_megapixels,
+            )
+        ),
+    )
+    raw = await image.read(max_mb * 1024 * 1024 + 1)
+    if len(raw) > max_mb * 1024 * 1024:
+        raise ApiError(413, "ASSET_TOO_LARGE", f"文件超过 {max_mb} MB 上传限制")
+    storage = _storage(request)
+    try:
+        prepared = await asyncio.to_thread(
+            _validate_selection_result, raw, base.width, base.height, max_mp
+        )
+        source_raw = await storage.get_object(source_key)
+        source = await asyncio.to_thread(
+            prepare_asset, source_raw, kind="original", max_megapixels=16
+        )
+        asset = await service.store(
+            database,
+            storage,
+            owner_id=principal.user_id,
+            prepared=prepared,
+            edit_source=source,
+            kind="result",
+            operation_code="cutout.refine",
+            parent_asset_id=base.id,
+            retention_days=entitlement.retention_days,
+            original_filename="selection-refined.png",
+            metadata={"workflow": "background-selection", "edit_restore_limited": limited},
+            request_id=getattr(request.state, "request_id", "selection-save"),
+        )
+    except AssetInputError as exc:
+        raise ApiError(422, "INVALID_SELECTION_RESULT", str(exc)) from exc
+    except ObjectStorageError as exc:
+        raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "修边结果保存失败，请重试") from exc
+    return {"asset": asset_payload(asset)}
 
 
 @router.get("/api/v1/assets/{asset_id}/lineage")

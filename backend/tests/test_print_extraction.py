@@ -13,6 +13,7 @@ from test_assets import client_for, login, raster_bytes, seed_user, upload
 
 from app.image_ops import ImageInputError, finalize_print_extraction
 from app.repositories.models import Asset, ImageJob, PointAccount
+from app.services.assets import AssetService
 from app.services.image_executor import ImageJobExecutor
 from app.sub2api import Sub2APIClient
 from app.workers.worker import execute_image_job
@@ -235,6 +236,20 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
             assert job.status == "succeeded"
             output = await session.get(Asset, job.output_asset_id)
             assert output.status == "ready" and output.parent_asset_id == uuid.UUID(source["id"])
+            if operation == "ai.extract_print":
+                assert output.asset_metadata["edit_source_ready"] is True
+                assert "_edit_source_data" not in output.asset_metadata
+                with (
+                    Image.open(
+                        BytesIO(
+                            await asset_context.storage.get_object(
+                                AssetService.edit_source_key(output.object_key)
+                            )
+                        )
+                    ) as edit_source,
+                    Image.open(BytesIO(raw)) as generated,
+                ):
+                    np.testing.assert_array_equal(np.array(edit_source), np.array(generated))
             assert balance == 200 - quote_response.json()["quote"]["final_points"]
             with (
                 Image.open(BytesIO(raw)) as original,

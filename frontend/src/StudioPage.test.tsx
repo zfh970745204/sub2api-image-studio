@@ -1,6 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import UserApp from "./UserApp";
+import type { Asset } from "./user-api";
+
+vi.mock("./BackgroundSelectionEditor", () => ({
+  BackgroundSelectionEditor: ({ asset, onSaved }: { asset: Asset; onSaved: (value: Asset) => void }) =>
+    <div role="dialog" aria-label="选区修边"><span>修边素材 {asset.id}</span><button onClick={() => onSaved({ ...asset, id: "refined-1", parent_asset_id: asset.id, operation_code: "cutout.refine" })}>测试保存修边</button></div>,
+}));
 
 const bootstrap = {
   user: { id: "user-1", display_name: "测试用户", email: "member@example.test" },
@@ -96,6 +102,23 @@ describe("Studio task workflow", () => {
     expect(screen.getByRole("button", { name: "原产品底色（不透明）" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("产品底色")).toHaveValue("#245eaa");
     expect(fetchMock.mock.calls.some(([url]) => url.includes("/print-background"))).toBe(false);
+  });
+
+  it("refines the generated print, shows the saved version and never submits a new paid job", async () => {
+    restoredJob = { ...job, operation_code: "ai.extract_print", source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: { output_mode: "transparent", background_color: "#000000" } };
+    events.mockImplementation(async () => response({ job: restoredJob }));
+    window.history.replaceState({}, "", "/app/studio?job=job-1");
+    render(<UserApp />);
+    await screen.findByRole("img", { name: "图片任务结果" });
+    fireEvent.click(screen.getByRole("button", { name: "选区修边" }));
+    expect(screen.getByText("修边素材 result-1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "测试保存修边" }));
+    expect(await screen.findByText(/修边已保存为新版本，未扣积分/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "选区修边" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "选区修边" }));
+    expect(screen.getByText("修边素材 refined-1")).toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/quote"))).toBe(false);
   });
 
   it("keeps the quote on a lost response and retries with the same key and parameters", async () => {

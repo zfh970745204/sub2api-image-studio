@@ -21,7 +21,7 @@ from app.repositories.models import (
     ObjectDeletionQueue,
     OutboxEvent,
 )
-from app.services.asset_files import PreparedAsset, make_thumbnail
+from app.services.asset_files import AssetInputError, PreparedAsset, make_thumbnail
 from app.services.security import SecurityService
 
 
@@ -43,6 +43,10 @@ class AssetService:
     @staticmethod
     def thumbnail_key(object_key: str) -> str:
         return f"{object_key.rsplit('/', 1)[0]}/preview-v1.webp"
+
+    @staticmethod
+    def edit_source_key(object_key: str) -> str:
+        return f"{object_key.rsplit('/', 1)[0]}/cutout-source-v1.png"
 
     async def ensure_thumbnail(self, session, storage, *, asset_id, owner_id) -> str:
         asset = await self.require_usable(session, asset_id, owner_id=owner_id)
@@ -95,6 +99,7 @@ class AssetService:
         *,
         owner_id: uuid.UUID,
         prepared: PreparedAsset,
+        edit_source: PreparedAsset | None = None,
         kind: str,
         operation_code: str,
         retention_days: int,
@@ -106,6 +111,11 @@ class AssetService:
         request_id: str = "asset-store",
         now: datetime | None = None,
     ) -> Asset:
+        if edit_source is not None and (
+            edit_source.extension != "png"
+            or (edit_source.width, edit_source.height) != (prepared.width, prepared.height)
+        ):
+            raise AssetInputError("选区修边原图必须为与结果同尺寸的 PNG")
         if kind not in ASSET_KINDS:
             raise ApiError(422, "INVALID_ASSET_KIND", "无效的素材类型")
         if not storage.bucket:
@@ -125,6 +135,7 @@ class AssetService:
                 created_at=current_time,
             )
             complete_metadata = dict(metadata or {})
+            complete_metadata["edit_source_ready"] = edit_source is not None
             complete_metadata["retention_days_snapshot"] = retention_days
             asset = Asset(
                 id=asset_id,
@@ -156,6 +167,15 @@ class AssetService:
             await session.commit()
 
         try:
+            # Write the source first: a recoverable complete main object always
+            # has its restoration pixels, including after a process crash.
+            if edit_source is not None:
+                await storage.put_object(
+                    self.edit_source_key(object_key),
+                    edit_source.data,
+                    content_type="image/png",
+                    metadata={"asset-id": str(asset_id), "purpose": "cutout-source"},
+                )
             await storage.put_object(
                 object_key,
                 prepared.data,
@@ -493,6 +513,7 @@ class AssetService:
                 try:
                     await storage.delete_object(row.object_key)
                     await storage.delete_object(self.thumbnail_key(row.object_key))
+                    await storage.delete_object(self.edit_source_key(row.object_key))
                 except ObjectStorageError as exc:
                     row.attempts += 1
                     row.status = "failed"
@@ -512,7 +533,11 @@ class AssetService:
         database_keys = {
             key
             for asset in assets
-            for key in (asset.object_key, self.thumbnail_key(asset.object_key))
+            for key in (
+                asset.object_key,
+                self.thumbnail_key(asset.object_key),
+                self.edit_source_key(asset.object_key),
+            )
         }
         storage_keys = {item.key for item in stored_objects}
         return OrphanScan(

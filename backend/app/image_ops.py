@@ -440,6 +440,7 @@ def _unmix_chroma_edges(
     background_mask: np.ndarray,
     *,
     native_alpha: np.ndarray | None = None,
+    flat_artwork: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Recover C = alpha * F + (1 - alpha) * B in a bounded, evidenced edge band.
 
@@ -461,9 +462,10 @@ def _unmix_chroma_edges(
         visible = (~background_mask).astype(np.uint8)
         depth = cv2.distanceTransform(visible, cv2.DIST_L2, 5)
         kernel = np.ones((3, 3), np.uint8)
+        donor_window = 3 if flat_artwork else 2 * radius + 1
         ridge = (depth >= cv2.dilate(depth, kernel) - 0.01) & (
             color_distance
-            >= cv2.dilate(color_distance, np.ones((2 * radius + 1,) * 2, np.uint8)) - 0.5
+            >= cv2.dilate(color_distance, np.ones((donor_window,) * 2, np.uint8)) - 0.5
         )
         red, green, blue = np.moveaxis(pixels, -1, 0)
         key_signal = (
@@ -474,7 +476,10 @@ def _unmix_chroma_edges(
         core = depth > radius
         stable = cv2.dilate(color_distance, kernel) - cv2.erode(color_distance, kernel) <= 8
         trusted_core = core & stable
-        solid = trusted_core | (ridge & (key_signal <= 25))
+        # On a flat artwork canvas, an adjacent darker letter must not prevent a
+        # red digit or separate fine stroke from donating its own edge color.
+        ridge_ink = color_distance >= 32 if flat_artwork else key_signal <= 25
+        solid = trusted_core | (ridge & ridge_ink)
         solid &= ~background_mask & (alpha >= 0.98)
         if native_alpha is not None:
             solid &= native_alpha >= 250
