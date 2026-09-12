@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, func, select, update
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.schema import CreateSchema, DropSchema
+from starlette.requests import Request
 
 from app.api.auth import router as auth_router
 from app.api.errors import install_exception_handlers
+from app.api.jobs import enqueue_job
 from app.api.jobs import router as jobs_router
 from app.api.middleware import RequestContextMiddleware
 from app.config import Settings
@@ -30,6 +37,7 @@ from app.repositories.models import (
     MembershipPlan,
     OperationCatalog,
     OperationPrice,
+    OutboxEvent,
     PointAccount,
     PointTransaction,
     Role,
@@ -42,6 +50,7 @@ from app.services.jobs import JobService, RetryableJobError, sync_builtin_operat
 from app.services.memberships import EntitlementService, sync_builtin_membership_plans
 from app.services.points import PointService
 from app.services.rbac import sync_builtin_rbac
+from app.workers.scheduler import dispatch_image_jobs
 from app.workers.worker import execute_image_job
 
 
@@ -56,8 +65,15 @@ class JobContext:
 
 
 @pytest_asyncio.fixture
-async def job_context(tmp_path) -> JobContext:
+async def job_context(tmp_path, request) -> JobContext:
     database_url = f"sqlite+aiosqlite:///{(tmp_path / 'jobs.db').as_posix()}"
+    schema = None
+    if getattr(request, "param", "sqlite") == "postgresql":
+        database_url = os.getenv("TEST_DATABASE_URL", "")
+        if os.getenv("APP_ENV") != "test" or not database_url:
+            pytest.skip("PostgreSQL job races require APP_ENV=test and TEST_DATABASE_URL")
+        assert (make_url(database_url).database or "").endswith("_test")
+        schema = f"job_queue_test_{uuid.uuid4().hex}"
     settings = Settings(
         _env_file=None,
         APP_ENV="test",
@@ -65,10 +81,15 @@ async def job_context(tmp_path) -> JobContext:
         ONBOARDING_POINTS=200,
     )
     database = Database(database_url)
+    if schema is None:
 
-    @event.listens_for(database.engine.sync_engine, "connect")
-    def enforce_foreign_keys(connection, _record):
-        connection.execute("PRAGMA foreign_keys=ON")
+        @event.listens_for(database.engine.sync_engine, "connect")
+        def enforce_foreign_keys(connection, _record):
+            connection.execute("PRAGMA foreign_keys=ON")
+    else:
+        async with database.engine.begin() as connection:
+            await connection.execute(CreateSchema(schema))
+        database.engine.update_execution_options(schema_translate_map={None: schema})
 
     async with database.engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -96,8 +117,13 @@ async def job_context(tmp_path) -> JobContext:
     app.add_middleware(RequestContextMiddleware)
     app.include_router(auth_router)
     app.include_router(jobs_router)
-    yield JobContext(app, database, auth_service, job_service, point_service, dispatched)
-    await database.dispose()
+    try:
+        yield JobContext(app, database, auth_service, job_service, point_service, dispatched)
+    finally:
+        if schema is not None:
+            async with database.engine.begin() as connection:
+                await connection.execute(DropSchema(schema, cascade=True))
+        await database.dispose()
 
 
 async def seed_user(
@@ -488,7 +514,7 @@ async def test_versioned_price_quote_snapshot_and_idempotent_charge(
 
 
 @pytest.mark.asyncio
-async def test_concurrency_limit_owner_isolation_cancel_and_expired_quote(
+async def test_extra_jobs_queue_owner_isolation_cancel_and_expired_quote(
     job_context: JobContext,
 ) -> None:
     owner = await seed_user(job_context, email="owner@example.com")
@@ -505,9 +531,9 @@ async def test_concurrency_limit_owner_isolation_cancel_and_expired_quote(
         job_id = created.json()["job"]["id"]
 
         second_quote = await quote(owner_client, "color.effect")
-        limited = await create_job(owner_client, second_quote, key="over-free-limit")
-        assert limited.status_code == 409
-        assert limited.json()["code"] == "JOB_CONCURRENCY_LIMIT"
+        additional = await create_job(owner_client, second_quote, key="over-free-limit")
+        assert additional.status_code == 201
+        assert additional.json()["job"]["status"] == "queued"
         assert (await stranger_client.get(f"/api/v1/jobs/{job_id}")).status_code == 404
         assert (await stranger_client.post(f"/api/v1/jobs/{job_id}/cancel")).status_code == 404
 
@@ -533,7 +559,7 @@ async def test_concurrency_limit_owner_isolation_cancel_and_expired_quote(
         account = (
             await session.scalars(select(PointAccount).where(PointAccount.user_id == owner.id))
         ).one()
-        assert account.balance == 200
+        assert account.balance == 199
         refunds = await session.scalar(
             select(func.count(PointTransaction.id)).where(
                 PointTransaction.user_id == owner.id,
@@ -897,3 +923,410 @@ async def test_admin_permissions_operation_control_and_job_reconciliation(
         job = await session.get(ImageJob, job_id)
         assert job is not None
         assert job.refund_status == "refunded"
+
+
+async def publish_task_concurrency(context: JobContext, user: User, limit: int) -> None:
+    async with context.database.session_factory() as session:
+        group = await session.scalar(select(ConfigGroup).where(ConfigGroup.code == "general"))
+        if group is None:
+            group = ConfigGroup(id=uuid7(), code="general", name="General")
+            session.add(group)
+            await session.flush()
+        number = (group.active_version or 0) + 1
+        session.add(
+            ConfigVersion(
+                group_id=group.id,
+                version=number,
+                status="active",
+                values={"task_concurrency": limit},
+                created_by=user.id,
+                change_reason="Test queue capacity",
+            )
+        )
+        group.active_version = number
+        await session.commit()
+
+
+async def submit_queue_job(context: JobContext, user: User, key: str) -> ImageJob:
+    async with context.database.session_factory() as session:
+        job_quote = await context.job_service.create_quote(
+            session,
+            user_id=user.id,
+            operation_code="cutout.smart",
+            source_asset_id=None,
+            parameters={},
+            ttl_seconds=300,
+            request_id=key,
+        )
+        await session.flush()
+        job, created = await context.job_service.create_job(
+            session,
+            user_id=user.id,
+            quote_id=job_quote.id,
+            parameters={},
+            idempotency_key=key,
+            request_fingerprint=context.job_service.request_fingerprint(user.id, job_quote.id, {}),
+            request_id=key,
+        )
+        await session.commit()
+        assert created
+        return job
+
+
+async def claim_queue_job(context: JobContext, job: ImageJob):
+    async with context.database.session_factory() as session:
+        claim = await context.job_service.claim_job(
+            session,
+            job_id=job.id,
+            worker_id=f"worker-{uuid.uuid4()}",
+            request_id="queue-test",
+            system_concurrency_limit=64,
+        )
+        await session.commit()
+        return claim
+
+
+@pytest.mark.parametrize("owner", [None, uuid.UUID(int=1)])
+def test_postgres_queue_eligibility_query_compiles(owner: uuid.UUID | None) -> None:
+    eligible = JobService._eligible_queued_jobs(datetime.now(UTC), user_id=owner)
+    statement = (
+        select(eligible.c.id, eligible.c.pricing_snapshot)
+        .order_by(eligible.c.position, eligible.c.queued_at, eligible.c.id)
+        .limit(2)
+    )
+    sql = str(
+        statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    )
+    # PostgreSQL needs JSON text extraction cast to integer before capacity arithmetic.
+    assert "->> 'max_concurrent_jobs' AS INTEGER)" in sql
+    assert "row_number() OVER (PARTITION BY image_jobs.user_id" in sql
+    assert "LEFT OUTER JOIN" in sql
+    assert "LIMIT 2" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "job_context",
+    ["sqlite", pytest.param("postgresql", marks=pytest.mark.integration)],
+    indirect=True,
+)
+@pytest.mark.parametrize("scope", ["user", "system"])
+async def test_claim_races_enforce_running_caps_and_duplicate_delivery(
+    job_context: JobContext, scope: str
+) -> None:
+    async with job_context.database.session_factory() as session:
+        await session.execute(update(MembershipPlan).values(max_concurrent_jobs=2))
+        await session.commit()
+    users = [
+        await seed_user(job_context, email=f"race-{i}@example.test")
+        for i in range(1 if scope == "user" else 3)
+    ]
+    await publish_task_concurrency(job_context, users[0], 64 if scope == "user" else 2)
+    jobs = [
+        await submit_queue_job(job_context, user, f"race-{i}-{n}")
+        for i, user in enumerate(users)
+        for n in range(6 if scope == "user" else 2)
+    ]
+    start = asyncio.Event()
+
+    async def contender(job):
+        await start.wait()
+        return await claim_queue_job(job_context, job)
+
+    # Independent connections and service calls, including duplicate deliveries.
+    tasks = [asyncio.create_task(contender(job)) for job in reversed(jobs * 2)]
+    start.set()
+    claims = [claim for claim in await asyncio.gather(*tasks) if claim is not None]
+    assert len(claims) == len({claim.job_id for claim in claims}) == 2
+    if scope == "user":
+        assert {claim.job_id for claim in claims} == {job.id for job in jobs[:2]}
+    async with job_context.database.session_factory() as session:
+        stored = list(await session.scalars(select(ImageJob)))
+        assert sum(job.status == "running" for job in stored) == 2
+        assert await session.scalar(select(func.count(JobAttempt.id))) == 2
+        for job in stored:
+            if job.status == "queued":
+                assert job.attempt_count == 0
+                assert job.started_at is None
+                assert job.worker_id is None
+                assert job.progress == 0
+            assert job.refund_status == "none"
+        assert await session.scalar(
+            select(func.count(PointTransaction.id)).where(PointTransaction.entry_type == "consume")
+        ) == len(jobs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "job_context",
+    ["sqlite", pytest.param("postgresql", marks=pytest.mark.integration)],
+    indirect=True,
+)
+async def test_rolled_back_claim_releases_capacity_without_attempt_or_event(
+    job_context: JobContext,
+) -> None:
+    user = await seed_user(job_context, email="rollback-claim@example.test")
+    job = await submit_queue_job(job_context, user, "rollback-claim")
+    await publish_task_concurrency(job_context, user, 1)
+    async with job_context.database.session_factory() as session:
+        claim = await job_context.job_service.claim_job(
+            session, job_id=job.id, worker_id="rollback", request_id="rollback"
+        )
+        assert claim is not None
+        contender = asyncio.create_task(claim_queue_job(job_context, job))
+        try:
+            # A second process must wait for the admission transaction to end.
+            done, _ = await asyncio.wait({contender}, timeout=0.1)
+            assert not done
+        finally:
+            await session.rollback()
+    accepted = await asyncio.wait_for(contender, timeout=5)
+    assert accepted is not None
+    assert accepted.attempt_no == 1
+    async with job_context.database.session_factory() as session:
+        assert await session.scalar(select(func.count(JobAttempt.id))) == 1
+        statuses = list(
+            await session.scalars(
+                select(OutboxEvent.payload)
+                .where(OutboxEvent.aggregate_id == job.id, OutboxEvent.topic == "jobs.status")
+                .order_by(OutboxEvent.created_at, OutboxEvent.id)
+            )
+        )
+        assert [payload["status"] for payload in statuses] == ["queued", "running"]
+        assert statuses[-1]["attempt_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_full_system_accepts_jobs_and_published_limit_changes_apply_at_claim(
+    job_context: JobContext,
+) -> None:
+    users = [await seed_user(job_context, email=f"capacity-{i}@example.test") for i in range(3)]
+    await publish_task_concurrency(job_context, users[0], 1)
+    first = await submit_queue_job(job_context, users[0], "capacity-first")
+    assert await claim_queue_job(job_context, first) is not None
+    async with client_for(job_context, user_agent="capacity-device") as client:
+        await login(client, users[0].email)
+        additional = await create_job(
+            client, await quote(client, "color.effect"), key="capacity-api"
+        )
+        assert additional.status_code == 201, additional.text
+        assert additional.json()["job"]["status"] == "queued"
+    second = await submit_queue_job(job_context, users[1], "capacity-second")
+    third = await submit_queue_job(job_context, users[2], "capacity-third")
+    assert await claim_queue_job(job_context, second) is None
+    # The API submission snapshot stays the same; the worker observes the new publication.
+    await publish_task_concurrency(job_context, users[0], 2)
+    assert await claim_queue_job(job_context, second) is not None
+    await publish_task_concurrency(job_context, users[0], 1)
+    assert await claim_queue_job(job_context, third) is None
+    async with job_context.database.session_factory() as session:
+        # Lowering capacity does not cancel work already running.
+        assert (
+            await session.scalar(
+                select(func.count(ImageJob.id)).where(ImageJob.status == "running")
+            )
+            == 2
+        )
+        assert await job_context.job_service.dispatchable_jobs(session) == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_saturated_backlog_and_shares_slots_between_users(
+    job_context: JobContext,
+) -> None:
+    users = [await seed_user(job_context, email=f"fair-{i}@example.test") for i in range(3)]
+    await publish_task_concurrency(job_context, users[0], 3)
+    blocked = [await submit_queue_job(job_context, users[0], f"backlog-{n}") for n in range(5)]
+    claim = await claim_queue_job(job_context, blocked[0])
+    assert claim is not None
+    second = await submit_queue_job(job_context, users[1], "fair-second")
+    third = await submit_queue_job(job_context, users[2], "fair-third")
+    async with job_context.database.session_factory() as session:
+        # Apply LIMIT after filtering users whose capacity is full.
+        selected = await job_context.job_service.dispatchable_jobs(session, limit=2)
+        assert [job_id for job_id, _ in selected] == [second.id, third.id]
+        assert (
+            await job_context.job_service.fail_job(
+                session,
+                claim=claim,
+                code="BUSY",
+                message="retry",
+                retryable=True,
+                timed_out=False,
+                provider_request_id=None,
+                metrics={},
+                request_id="fair-retry",
+            )
+            == "retry_wait"
+        )
+        await session.commit()
+    async with job_context.database.session_factory() as session:
+        selected = await job_context.job_service.dispatchable_jobs(session)
+        assert [job_id for job_id, _ in selected] == [blocked[1].id, second.id, third.id]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_offers_each_user_a_slot_before_filling_member_capacity(
+    job_context: JobContext,
+) -> None:
+    async with job_context.database.session_factory() as session:
+        await session.execute(update(MembershipPlan).values(max_concurrent_jobs=3))
+        await session.commit()
+    users = [await seed_user(job_context, email=f"share-{i}@example.test") for i in range(3)]
+    await publish_task_concurrency(job_context, users[0], 4)
+    jobs = [
+        [await submit_queue_job(job_context, user, f"share-{i}-{n}") for n in range(3)]
+        for i, user in enumerate(users)
+    ]
+    async with job_context.database.session_factory() as session:
+        selected = await job_context.job_service.dispatchable_jobs(session)
+        assert [job_id for job_id, _ in selected] == [
+            jobs[0][0].id,
+            jobs[1][0].id,
+            jobs[2][0].id,
+            jobs[0][1].id,
+        ]
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_does_not_start_timeout_or_bypass_deferred_delivery(
+    job_context: JobContext,
+) -> None:
+    user = await seed_user(job_context, email="queued-timeout@example.test")
+    job = await submit_queue_job(job_context, user, "queued-timeout")
+    now = datetime.now(UTC)
+    async with job_context.database.session_factory() as session:
+        await session.execute(
+            update(ImageJob)
+            .where(ImageJob.id == job.id)
+            .values(queued_at=now - timedelta(days=1), next_attempt_at=now + timedelta(minutes=1))
+        )
+        await session.commit()
+    async with job_context.database.session_factory() as session:
+        result = await job_context.job_service.reconcile_stale_jobs(
+            session, now=now, request_id="queued-timeout"
+        )
+        assert result.checked == result.timed_out == result.refunds_created == 0
+        assert await job_context.job_service.dispatchable_jobs(session, now=now) == []
+        assert (
+            await job_context.job_service.claim_job(
+                session, job_id=job.id, worker_id="early", request_id="early", now=now
+            )
+            is None
+        )
+        await session.commit()
+    async with job_context.database.session_factory() as session:
+        claim = await job_context.job_service.claim_job(
+            session,
+            job_id=job.id,
+            worker_id="due",
+            request_id="due",
+            now=now + timedelta(minutes=2),
+        )
+        assert claim is not None
+        # Expiration uses the attempt start, regardless of how long it was queued.
+        result = await job_context.job_service.reconcile_stale_jobs(
+            session, now=now + timedelta(minutes=3), request_id="fresh-attempt"
+        )
+        assert result.checked == 1
+        assert result.timed_out == result.refunds_created == 0
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_waiting_delivery_and_due_retry_survive_arq_dedup_and_refund_once(
+    job_context: JobContext,
+    monkeypatch,
+) -> None:
+    user = await seed_user(job_context, email="delivery@example.test")
+    await publish_task_concurrency(job_context, user, 1)
+    first = await submit_queue_job(job_context, user, "delivery-first")
+    second = await submit_queue_job(job_context, user, "delivery-second")
+
+    class RetainedDeliveries:
+        """ARQ refuses an ID while either its payload or result still exists."""
+
+        def __init__(self):
+            self.ids = set()
+            self.deliveries = []
+
+        async def enqueue_job(self, function, job_id, *, _job_id, _queue_name):
+            if _job_id in self.ids:
+                return None
+            self.ids.add(_job_id)
+            self.deliveries.append((job_id, _job_id))
+            return SimpleNamespace(job_id=_job_id)
+
+        async def aclose(self):
+            pass
+
+    redis = RetainedDeliveries()
+
+    async def pool(_settings):
+        return redis
+
+    monkeypatch.setattr("app.api.jobs.create_pool", pool)
+    del job_context.app.state.job_enqueuer
+    request = Request({"type": "http", "app": job_context.app})
+    assert await enqueue_job(request, second)
+    first_delivery_id = redis.deliveries[-1][1]
+    calls = []
+
+    async def busy(claim):
+        calls.append(claim.job_id)
+        raise RetryableJobError("UPSTREAM_BUSY", "Try again")
+
+    ctx = {
+        "runtime": SimpleNamespace(database=job_context.database, instance_name="delivery-worker"),
+        "settings": job_context.app.state.settings,
+        "redis": redis,
+        "image_job_executor": busy,
+    }
+    # Out-of-order API delivery stays queued, without consuming an application attempt.
+    assert (await execute_image_job(ctx, str(second.id)))["status"] == "ignored"
+    assert calls == []
+    assert (await execute_image_job(ctx, str(first.id)))["status"] == "retry_wait"
+    assert (await dispatch_image_jobs(ctx))["jobs_dispatched"] == 1
+    assert redis.deliveries[-1][0] == str(second.id)
+    assert redis.deliveries[-1][1] != first_delivery_id
+    # Even if a previous ARQ result has not expired, redispatch is independent.
+    assert (await dispatch_image_jobs(ctx))["jobs_dispatched"] == 1
+    assert (await execute_image_job(ctx, str(second.id)))["status"] == "retry_wait"
+    async with job_context.database.session_factory() as session:
+        waiting = await session.get(ImageJob, second.id)
+        assert waiting.attempt_count == 1
+        assert waiting.refund_status == "none"
+        assert (
+            await job_context.job_service.release_due_retries(
+                session, now=datetime.now(UTC) - timedelta(seconds=1), request_id="too-early"
+            )
+            == 0
+        )
+        # Leave the first retry in backoff; the scheduler must release only the due retry.
+        waiting.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+    dispatched = await dispatch_image_jobs(ctx)
+    assert dispatched == {"retries_released": 1, "jobs_dispatched": 1}
+    assert redis.deliveries[-1][0] == str(second.id)
+    # cutout.smart permits two attempts, then refunds the original charge once.
+    assert (await execute_image_job(ctx, str(second.id)))["status"] == "failed"
+    assert (await execute_image_job(ctx, str(second.id)))["status"] == "ignored"
+    async with job_context.database.session_factory() as session:
+        completed = await session.get(ImageJob, second.id)
+        assert completed.attempt_count == 2
+        assert completed.refund_status == "refunded"
+        assert (
+            await session.scalar(
+                select(func.count(PointTransaction.id)).where(
+                    PointTransaction.reference_id == second.id,
+                    PointTransaction.entry_type == "refund",
+                )
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(PointAccount.balance).where(PointAccount.user_id == user.id)
+            )
+            == 198
+        )

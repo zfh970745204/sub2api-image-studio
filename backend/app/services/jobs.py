@@ -13,10 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import ApiError
 from app.domain.ids import uuid7
-from app.domain.jobs import ACTIVE_JOB_STATUSES, OPERATION_SEEDS, REFUNDABLE_JOB_STATUSES
+from app.domain.jobs import OPERATION_SEEDS, REFUNDABLE_JOB_STATUSES
 from app.repositories.models import (
     Asset,
     ConfigGroup,
+    ConfigVersion,
     ImageJob,
     JobAttempt,
     JobQuote,
@@ -227,7 +228,6 @@ class JobService:
         idempotency_key: str,
         request_fingerprint: str,
         request_id: str,
-        system_concurrency_limit: int | None = None,
         require_sub2api_config: bool = False,
         now: datetime | None = None,
     ) -> tuple[ImageJob, bool]:
@@ -278,40 +278,6 @@ class JobService:
         ).one()
         if not operation.enabled:
             raise ApiError(409, "OPERATION_DISABLED", "图片操作已停用")
-        active_count = await session.scalar(
-            select(func.count(ImageJob.id)).where(
-                ImageJob.user_id == user_id,
-                ImageJob.status.in_(ACTIVE_JOB_STATUSES),
-            )
-        )
-        max_concurrent = int(quote.membership_snapshot["max_concurrent_jobs"])
-        if int(active_count or 0) >= max_concurrent:
-            raise ApiError(
-                409,
-                "JOB_CONCURRENCY_LIMIT",
-                "当前运行或排队任务已达到会员并发上限",
-                {"limit": max_concurrent},
-            )
-        if system_concurrency_limit is not None:
-            system_active_count = await session.scalar(
-                select(func.count(ImageJob.id)).where(ImageJob.status.in_(ACTIVE_JOB_STATUSES))
-            )
-            if int(system_active_count or 0) >= system_concurrency_limit:
-                SecurityService.record_event(
-                    session,
-                    event_type="system_job_concurrency_open",
-                    severity="high",
-                    user_id=user_id,
-                    ip_hash=None,
-                    request_id=request_id,
-                    details={"limit": system_concurrency_limit},
-                )
-                raise ApiError(
-                    503,
-                    "JOB_SYSTEM_CONCURRENCY_LIMIT",
-                    "图片任务服务当前繁忙，请稍后重试",
-                    {"limit": system_concurrency_limit},
-                )
         sub2api_config_version = None
         if operation.engine_type == "sub2api":
             sub2api_config_version = await session.scalar(
@@ -437,9 +403,38 @@ class JobService:
         job_id: uuid.UUID,
         worker_id: str,
         request_id: str,
+        system_concurrency_limit: int = 2,
         now: datetime | None = None,
     ) -> ClaimedJob | None:
+        # Serialize admission across processes until the caller commits/rolls back.
+        # Lock before reading counts: row locks on different jobs cannot protect a
+        # shared system limit. Execution itself runs outside this transaction.
+        if session.get_bind().dialect.name == "postgresql":
+            await session.execute(select(func.pg_advisory_xact_lock(734_219_806_125)))
+        elif session.get_bind().dialect.name == "sqlite":
+            # SQLite has no row/advisory locks. Acquire its writer lock before reads.
+            await session.execute(
+                update(ImageJob)
+                .where(ImageJob.id == job_id)
+                .values(id=ImageJob.id, updated_at=ImageJob.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+        else:
+            raise RuntimeError("Image job admission requires PostgreSQL or SQLite")
+
         current_time = now or utcnow()
+        user_id = await session.scalar(
+            select(ImageJob.user_id).where(ImageJob.id == job_id, ImageJob.status == "queued")
+        )
+        if user_id is None:
+            return None
+        if await self._available_system_slots(session, system_concurrency_limit) == 0:
+            return None
+        # The same per-user FIFO eligibility is used by periodic dispatch. A late
+        # Redis delivery must not jump ahead of older work from the same user.
+        eligible = self._eligible_queued_jobs(current_time, user_id=user_id)
+        if await session.scalar(select(eligible.c.id).where(eligible.c.id == job_id)) is None:
+            return None
         result = await session.execute(
             update(ImageJob)
             .where(ImageJob.id == job_id, ImageJob.status == "queued")
@@ -460,7 +455,7 @@ class JobService:
         attempt_no = result.scalar_one_or_none()
         if attempt_no is None:
             return None
-        job = await session.get(ImageJob, job_id)
+        job = await session.get(ImageJob, job_id, populate_existing=True)
         if job is None:
             return None
         operation = (
@@ -677,15 +672,24 @@ class JobService:
         return len(jobs)
 
     async def dispatchable_jobs(
-        self, session: AsyncSession, *, limit: int = 100
+        self,
+        session: AsyncSession,
+        *,
+        limit: int = 100,
+        system_concurrency_limit: int = 2,
+        now: datetime | None = None,
     ) -> list[tuple[uuid.UUID, str]]:
+        available = await self._available_system_slots(session, system_concurrency_limit)
+        if available == 0:
+            return []
+        eligible = self._eligible_queued_jobs(now or utcnow())
         rows = list(
             (
                 await session.execute(
-                    select(ImageJob.id, ImageJob.pricing_snapshot)
-                    .where(ImageJob.status == "queued")
-                    .order_by(ImageJob.queued_at, ImageJob.id)
-                    .limit(limit)
+                    select(eligible.c.id, eligible.c.pricing_snapshot)
+                    # Give each eligible user a first slot before filling seconds.
+                    .order_by(eligible.c.position, eligible.c.queued_at, eligible.c.id)
+                    .limit(min(limit, available))
                 )
             ).all()
         )
@@ -696,6 +700,60 @@ class JobService:
             )
             for job_id, snapshot in rows
         ]
+
+    @staticmethod
+    async def _available_system_slots(session: AsyncSession, fallback: int) -> int:
+        # Read the published value in this transaction, bypassing runtime caches.
+        # Drafts and the value captured when a job was submitted cannot set capacity.
+        values = await session.scalar(
+            select(ConfigVersion.values)
+            .join(ConfigGroup, ConfigGroup.id == ConfigVersion.group_id)
+            .where(
+                ConfigGroup.code == "general",
+                ConfigVersion.version == ConfigGroup.active_version,
+            )
+        )
+        limit = max(1, int((values or {}).get("task_concurrency", fallback)))
+        running = await session.scalar(
+            select(func.count(ImageJob.id)).where(ImageJob.status == "running")
+        )
+        return max(0, limit - int(running or 0))
+
+    @staticmethod
+    def _eligible_queued_jobs(now: datetime, *, user_id: uuid.UUID | None = None):
+        running = (
+            select(ImageJob.user_id, func.count(ImageJob.id).label("count"))
+            .where(ImageJob.status == "running")
+            .group_by(ImageJob.user_id)
+            .subquery()
+        )
+        queued = (
+            select(
+                ImageJob.id,
+                ImageJob.user_id,
+                ImageJob.queued_at,
+                ImageJob.pricing_snapshot,
+                func.coalesce(
+                    ImageJob.pricing_snapshot["membership"]["max_concurrent_jobs"].as_integer(),
+                    1,
+                ).label("user_limit"),
+                func.row_number()
+                .over(partition_by=ImageJob.user_id, order_by=(ImageJob.queued_at, ImageJob.id))
+                .label("position"),
+            )
+            .where(
+                ImageJob.status == "queued",
+                or_(ImageJob.next_attempt_at.is_(None), ImageJob.next_attempt_at <= now),
+                *([ImageJob.user_id == user_id] if user_id is not None else []),
+            )
+            .subquery()
+        )
+        return (
+            select(queued)
+            .outerjoin(running, running.c.user_id == queued.c.user_id)
+            .where(queued.c.position <= queued.c.user_limit - func.coalesce(running.c.count, 0))
+            .subquery()
+        )
 
     async def reconcile_stale_jobs(
         self,

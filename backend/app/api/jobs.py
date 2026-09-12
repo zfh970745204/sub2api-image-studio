@@ -28,7 +28,6 @@ from app.repositories.models import (
     OperationPrice,
 )
 from app.services.assets import AssetService
-from app.services.configuration import runtime_config_value
 from app.services.jobs import JobService
 
 logger = logging.getLogger(__name__)
@@ -274,7 +273,8 @@ async def enqueue_job(request: Request, job: ImageJob) -> bool:
             queued = await pool.enqueue_job(
                 "execute_image_job",
                 str(job.id),
-                _job_id=f"image-job:{job.id}",
+                # Each delivery is independent; DB claiming owns job uniqueness.
+                _job_id=f"image-job:{job.id}:{uuid.uuid4().hex}",
                 _queue_name=queue_name,
             )
         finally:
@@ -398,14 +398,6 @@ async def create_job(
         principal.user_id, payload.quote_id, payload.parameters
     )
     database = request.app.state.runtime_services.database
-    concurrency_limit = int(
-        await runtime_config_value(
-            request.app.state.runtime_services,
-            "general",
-            "task_concurrency",
-            request.app.state.settings.worker_max_jobs,
-        )
-    )
     async with database.session_factory() as session:
         try:
             job, created = await service.create_job(
@@ -416,14 +408,9 @@ async def create_job(
                 idempotency_key=idempotency_key,
                 request_fingerprint=fingerprint,
                 request_id=request_id(request),
-                system_concurrency_limit=concurrency_limit,
                 require_sub2api_config=not request.app.state.settings.legacy_sync_api_enabled,
             )
             await session.commit()
-        except ApiError as exc:
-            if exc.code == "JOB_SYSTEM_CONCURRENCY_LIMIT":
-                await session.commit()
-            raise
         except IntegrityError as exc:
             await session.rollback()
             # Do not mislabel FK/check failures as a user-caused state conflict,

@@ -3,14 +3,14 @@ from io import BytesIO
 from uuid import UUID
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy import select
 from test_assets import asset_context as asset_fixture
 from test_assets import client_for, login, raster_bytes, seed_user, upload
 
 from app.object_storage import ObjectStorageError
 from app.repositories.models import Asset, PointAccount
-from app.services.asset_files import prepare_asset
+from app.services.asset_files import inspect_stored_asset, prepare_asset
 from app.services.assets import AssetService
 
 asset_context = asset_fixture
@@ -185,3 +185,179 @@ async def test_restore_sidecar_is_cleaned_if_main_upload_fails(asset_context, mo
         "completed"
     ] == 1
     assert not asset_context.storage.objects
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_sidecar", [False, True])
+async def test_selection_serves_stored_png_bytes_without_normalization(
+    asset_context, monkeypatch, with_sidecar
+):
+    owner = await seed_user(asset_context, email="selection-png-fast-path@example.test")
+    prepared = prepare_asset(raster_bytes(mode="RGBA"), kind="original", max_megapixels=16)
+    source = prepare_asset(raster_bytes(), kind="original", max_megapixels=16)
+    asset = await AssetService().store(
+        asset_context.database,
+        asset_context.storage,
+        owner_id=owner.id,
+        prepared=prepared,
+        edit_source=source if with_sidecar else None,
+        kind="result" if with_sidecar else "original",
+        operation_code="ai.extract_print" if with_sidecar else "upload",
+        retention_days=30,
+    )
+
+    def unexpected_normalization(*args, **kwargs):
+        pytest.fail("Reading stored PNG pixels must not decode or normalize the image again")
+
+    monkeypatch.setattr("app.api.assets.prepare_asset", unexpected_normalization)
+    async with client_for(asset_context, "selection-png-fast-path") as client:
+        await login(client, owner.email)
+        response = await client.get(f"/api/v1/assets/{asset.id}/selection")
+        assert response.status_code == 200, response.text
+        context = response.json()
+        assert (context["width"], context["height"]) == (12, 8)
+        assert context["has_initial_selection"] is with_sidecar
+        assert context["restore_limited"] is False
+        if with_sidecar:
+            assert context["source_url"] != context["result_url"]
+        else:
+            assert context["source_url"] == context["result_url"]
+        for layer, expected in (
+            ("source", source.data if with_sidecar else prepared.data),
+            ("result", prepared.data),
+        ):
+            response = await client.get(f"/api/v1/assets/{asset.id}/selection/{layer}")
+            assert response.status_code == 200, response.text
+            assert response.content == expected
+            assert response.headers["content-type"] == "image/png"
+            assert response.headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_format,extension", [("JPEG", "jpg"), ("WEBP", "webp")])
+async def test_selection_still_orients_and_normalizes_legacy_non_png_sources(
+    asset_context, image_format, extension
+):
+    owner = await seed_user(asset_context, email="selection-legacy-format@example.test")
+    exif = Image.Exif()
+    exif[274] = 6
+    image = Image.new("RGB", (12, 8), "white")
+    image.paste("red", (0, 0, 6, 4))
+    buffer = BytesIO()
+    image.save(buffer, image_format, exif=exif)
+    raw = buffer.getvalue()
+    prepared = prepare_asset(raw, kind="original", max_megapixels=16)
+    asset = await AssetService().store(
+        asset_context.database,
+        asset_context.storage,
+        owner_id=owner.id,
+        prepared=prepared,
+        kind="original",
+        operation_code="upload",
+        retention_days=30,
+    )
+    # Represent a pre-normalization object, retaining its correctly oriented catalog geometry.
+    asset_context.storage.objects[asset.object_key] = raw
+    async with asset_context.database.session_factory() as session:
+        row = await session.get(Asset, asset.id)
+        row.mime_type = "image/jpeg" if image_format == "JPEG" else "image/webp"
+        row.extension = extension
+        await session.commit()
+    async with client_for(asset_context, "selection-legacy-format") as client:
+        await login(client, owner.email)
+        context = (await client.get(f"/api/v1/assets/{asset.id}/selection")).json()
+        assert context["source_url"] == context["result_url"]
+        assert (context["width"], context["height"]) == (8, 12)
+        for layer in ("source", "result"):
+            response = await client.get(f"/api/v1/assets/{asset.id}/selection/{layer}")
+            assert response.status_code == 200, response.text
+            assert response.content == prepared.data
+            with (
+                Image.open(BytesIO(response.content)) as result,
+                Image.open(BytesIO(raw)) as stored,
+            ):
+                assert result.format == "PNG" and result.size == (8, 12)
+                assert result.getexif().get(274) is None
+                assert result.tobytes() == ImageOps.exif_transpose(stored).convert("RGB").tobytes()
+
+
+@pytest.mark.asyncio
+async def test_editable_asset_filter_runs_before_cursor_pagination(asset_context):
+    owner = await seed_user(asset_context, email="editable-page-owner@example.test")
+    stranger = await seed_user(asset_context, email="editable-page-stranger@example.test")
+    service = AssetService()
+    raster = prepare_asset(raster_bytes(), kind="original", max_megapixels=16)
+    mask = prepare_asset(raster_bytes(mode="RGBA"), kind="mask", max_megapixels=16)
+    thumbnail = prepare_asset(raster_bytes(), kind="thumbnail", max_megapixels=16)
+    vector = prepare_asset(
+        b'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><path d="M0 0L12 8"/></svg>',
+        kind="vector",
+        max_megapixels=16,
+    )
+    timestamp = datetime.now(UTC) - timedelta(hours=1)
+    sequence = 0
+
+    async def store(prepared, kind, *, owner_id=None):
+        nonlocal sequence
+        sequence += 1
+        return await service.store(
+            asset_context.database,
+            asset_context.storage,
+            owner_id=owner_id or owner.id,
+            prepared=prepared,
+            kind=kind,
+            operation_code="upload",
+            retention_days=30,
+            now=timestamp + timedelta(seconds=sequence),
+        )
+
+    eligible = []
+    all_owner_ids = []
+    for kind in ("original", "result"):
+        for image_format, extension in (("PNG", "png"), ("JPEG", "jpg"), ("WEBP", "webp")):
+            # Surround each eligible row with ineligible rows so filtering after LIMIT loses pages.
+            all_owner_ids.append(str((await store(mask, "mask")).id))
+            prepared = inspect_stored_asset(
+                raster_bytes(image_format=image_format, exif=Image.Exif()), extension=extension
+            )
+            asset = await store(prepared, kind)
+            eligible.append(asset)
+            all_owner_ids.append(str(asset.id))
+            all_owner_ids.append(str((await store(thumbnail, "thumbnail")).id))
+            all_owner_ids.append(str((await store(vector, "vector")).id))
+    unsupported = await store(raster, "result")
+    all_owner_ids.append(str(unsupported.id))
+    deleted = await store(raster, "original")
+    await store(raster, "original", owner_id=stranger.id)
+    async with asset_context.database.session_factory() as session:
+        row = await session.get(Asset, unsupported.id)
+        row.mime_type = "image/gif"
+        await service.soft_delete(session, asset_id=deleted.id, owner_id=owner.id, grace_days=7)
+        await session.commit()
+
+    expected = [str(asset.id) for asset in reversed(eligible)]
+    async with client_for(asset_context, "editable-page-owner") as client:
+        await login(client, owner.email)
+        seen = []
+        cursor = None
+        for page_index in range(3):
+            parameters = {"editable_only": "true", "limit": 2}
+            if cursor:
+                parameters["cursor"] = cursor
+            response = await client.get("/api/v1/assets", params=parameters)
+            assert response.status_code == 200, response.text
+            page = response.json()
+            ids = [item["id"] for item in page["items"]]
+            assert ids == expected[page_index * 2 : page_index * 2 + 2]
+            seen.extend(ids)
+            cursor = page["next_cursor"]
+            assert cursor == (ids[-1] if page_index < 2 else None)
+        assert seen == expected and len(set(seen)) == 6
+        unfiltered = await client.get("/api/v1/assets", params={"limit": 100})
+        assert {item["id"] for item in unfiltered.json()["items"]} == set(all_owner_ids)
+        result_only = await client.get(
+            "/api/v1/assets", params={"editable_only": "true", "kind": "result", "limit": 100}
+        )
+        assert {item["id"] for item in result_only.json()["items"]} == {
+            str(asset.id) for asset in eligible if asset.kind == "result"
+        }

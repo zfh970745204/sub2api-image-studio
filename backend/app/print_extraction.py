@@ -101,6 +101,26 @@ def extract_prompt(color: str, instruction: str = "") -> str:
     return f"{prompt}\nUser instruction: {instruction}" if instruction else prompt
 
 
+def size_print_outputs(
+    output: bytes, edit_source: bytes, *, size: str, mode: str, color: str
+) -> tuple[bytes, bytes]:
+    """Fit both layers to the same canvas without stretching or cropping ink."""
+    width, height = (int(value) for value in size.split("x"))
+    results = []
+    for raw, transparent, is_source in (
+        (output, mode == "transparent", False),
+        (edit_source, False, True),
+    ):
+        with Image.open(BytesIO(raw)) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGBA")
+            resized = ImageOps.contain(image, (width, height), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0) if transparent else color)
+            # Pasting without a mask retains native alpha in the restoration source.
+            canvas.paste(resized, ((width - resized.width) // 2, (height - resized.height) // 2))
+            results.append(_png(canvas if transparent or is_source else canvas.convert("RGB")))
+    return results[0], results[1]
+
+
 def finish_print(raw: bytes, *, mode: str, color: str) -> tuple[bytes, dict[str, Any]]:
     with Image.open(BytesIO(raw)) as source:
         source.load()
@@ -135,7 +155,7 @@ def finish_print(raw: bytes, *, mode: str, color: str) -> tuple[bytes, dict[str,
         np.mean(np.linalg.norm(border - background, axis=1) <= 24) < 0.8
         or np.linalg.norm(background - target) > 80
     ):
-        raise ImageInputError("图片服务未返回与产品底色相近的平整背景，请确认底色后重试。")
+        raise ImageInputError("图片服务未返回平整的印花背景，请重试或换用更清晰的产品图片。")
     distance = np.linalg.norm(rgb.astype(np.float32) - background, axis=2)
     if np.count_nonzero(distance > 24) < max(4, distance.size * 0.0001):
         raise ImageInputError("未提取到有效印花，请换用更清晰的原图。")

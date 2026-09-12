@@ -1,0 +1,102 @@
+.asset-picker-dialog {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: min(1100px, calc(100vw - 40px));
+  height: min(820px, calc(100dvh - 48px));
+  max-width: none;
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  color: var(--studio-ink);
+  border: 1px solid var(--studio-line);
+  border-radius: 16px;
+  background: var(--studio-paper);
+  box-shadow: 0 24px 80px #17223d30;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.asset-picker-dialog[open] { display: flex; flex-direction: column; }
+.asset-picker-dialog::backdrop { background: #17223d66; backdrop-filter: blur(3px); }
+.asset-picker-dialog * { box-sizing: border-box; }
+.asset-picker-dialog button, .asset-picker-dialog select {
+  min-height: 36px;
+  padding: 7px 12px;
+  color: var(--studio-ink);
+  border: 1px solid var(--studio-line);
+  border-radius: var(--studio-control-radius);
+  background: var(--studio-paper);
+  font: inherit;
+  cursor: pointer;
+}
+.asset-picker-dialog button:hover:not(:disabled) { border-color: var(--studio-accent); background: var(--studio-accent-soft); }
+.asset-picker-dialog button:disabled, .asset-picker-dialog select:disabled { opacity: .5; cursor: not-allowed; }
+.asset-picker-dialog button:focus-visible, .asset-picker-dialog select:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
+.asset-picker-header, .asset-picker-toolbar, .asset-picker-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-shrink: 0; padding: 18px 24px; }
+.asset-picker-header { align-items: flex-start; border-bottom: 1px solid var(--studio-soft-line); }
+.asset-picker-header h2 { margin: 0; color: var(--studio-ink); font-size: 20px; font-weight: 650; overflow-wrap: anywhere; }
+.asset-picker-header p { margin: 5px 0 0; color: var(--studio-muted); font-size: 13px; }
+.asset-picker-dialog .asset-picker-close { display: grid; place-items: center; flex-shrink: 0; width: 36px; padding: 0; border-color: transparent; }
+.asset-picker-toolbar { padding-block: 14px; }
+.asset-picker-toolbar > span { color: var(--studio-muted); font-size: 12px; }
+.asset-picker-filters { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--studio-surface); }
+.asset-picker-dialog .asset-picker-filters button { border-color: transparent; background: transparent; white-space: nowrap; }
+.asset-picker-dialog .asset-picker-filters button[aria-pressed="true"] { color: var(--studio-accent); border-color: var(--studio-line); background: var(--studio-paper); font-weight: 600; box-shadow: 0 1px 3px #17223d08; }
+.asset-picker-content { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 4px 24px 20px; }
+.asset-picker-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; margin: 0; padding: 0; list-style: none; }
+.asset-picker-grid > li { min-width: 0; }
+.asset-picker-dialog .asset-picker-card { display: block; width: 100%; height: 100%; padding: 0; overflow: hidden; text-align: left; border-radius: var(--studio-panel-radius); }
+.asset-picker-dialog .asset-picker-card[aria-pressed="true"] { border-color: var(--studio-accent); background: var(--studio-accent-soft); box-shadow: 0 0 0 1px var(--studio-accent); }
+.asset-picker-dialog .asset-picker-card:disabled { opacity: .6; }
+.asset-picker-thumbnail { position: relative; display: grid; place-items: center; aspect-ratio: 1; overflow: hidden; color: var(--studio-muted); background: var(--studio-surface); }
+.asset-picker-thumbnail > img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.asset-picker-kind, .asset-picker-badge { position: absolute; display: inline-flex; align-items: center; gap: 3px; padding: 3px 6px; border: 1px solid var(--studio-line); border-radius: 5px; background: var(--studio-paper); font-size: 10px; }
+.asset-picker-kind { top: 8px; left: 8px; }
+.asset-picker-badge { right: 8px; bottom: 8px; color: var(--studio-accent); border-color: var(--studio-accent); background: var(--studio-accent-soft); }
+.asset-picker-details { display: grid; gap: 3px; padding: 10px 11px; }
+.asset-picker-details strong, .asset-picker-selection strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.asset-picker-details small, .asset-picker-selection small { display: block; color: var(--studio-muted); font-size: 11px; }
+.asset-picker-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 100%; padding: 24px; text-align: center; color: var(--studio-muted); overflow-wrap: anywhere; }
+.asset-picker-state p { margin: 0; color: var(--studio-ink); font-size: 14px; }
+.asset-picker-state[role="alert"] > span { color: var(--studio-red); }
+.asset-picker-spinner { color: var(--studio-accent); animation: asset-picker-spin 1s linear infinite; }
+.asset-picker-dialog .user-pagination { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; width: 100%; min-height: 0; margin: 0; padding: 12px 24px; border-top: 1px solid var(--studio-soft-line); color: var(--studio-muted); font-size: 12px; }
+.asset-picker-dialog .user-pagination label { display: flex; flex-basis: auto; align-items: center; gap: 8px; margin: 0; white-space: nowrap; }
+.asset-picker-dialog .pagination-navigation { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.asset-picker-dialog .pagination-navigation > span { min-width: 62px; text-align: center; color: var(--studio-ink); }
+.asset-picker-dialog .pagination-refresh { color: var(--studio-muted); }
+.asset-picker-footer { border-top: 1px solid var(--studio-line); background: var(--studio-surface); }
+.asset-picker-selection { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--studio-muted); }
+.asset-picker-selection > span:last-child { min-width: 0; }
+.asset-picker-selection strong { color: var(--studio-ink); }
+.asset-picker-selection-image { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; overflow: hidden; border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-paper); }
+.asset-picker-selection-image img { width: 100%; height: 100%; object-fit: contain; }
+.asset-picker-actions { display: flex; flex-shrink: 0; gap: 10px; }
+.asset-picker-dialog .asset-picker-confirm { padding-inline: 22px; color: var(--studio-paper); border-color: var(--studio-accent); background: var(--studio-accent); }
+.asset-picker-dialog .asset-picker-confirm:hover:not(:disabled) { border-color: var(--studio-accent-hover); background: var(--studio-accent-hover); }
+
+@keyframes asset-picker-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .asset-picker-spinner { animation: none; } }
+@media (max-width: 950px) { .asset-picker-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .asset-picker-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .asset-picker-toolbar { align-items: flex-start; flex-direction: column; gap: 8px; }
+}
+@media (max-width: 560px) {
+  .asset-picker-dialog { width: calc(100vw - 16px); height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); border-radius: 12px; }
+  .asset-picker-header, .asset-picker-toolbar, .asset-picker-footer { padding: 12px 16px; }
+  .asset-picker-header h2 { font-size: 18px; }
+  .asset-picker-content { padding: 4px 16px 16px; }
+  .asset-picker-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .asset-picker-dialog .user-pagination { padding: 10px 16px; gap: 8px; }
+  .asset-picker-dialog .pagination-navigation { order: 1; flex-basis: 100%; justify-content: space-between; }
+  .asset-picker-footer { align-items: stretch; flex-direction: column; gap: 12px; }
+  .asset-picker-actions button { flex: 1; }
+}
+@media (max-height: 500px) {
+  .asset-picker-dialog { height: calc(100dvh - 16px); max-height: calc(100dvh - 16px); overflow: auto; }
+  .asset-picker-content { flex: none; min-height: 180px; overflow: visible; }
+}

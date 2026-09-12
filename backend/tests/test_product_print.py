@@ -3,11 +3,13 @@ from io import BytesIO
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
+from sqlalchemy import func, select
 from test_assets import asset_context as asset_fixture
 from test_assets import client_for, login, seed_user, upload
 
 from app.image_ops import ImageInputError
 from app.print_extraction import finish_print, product_background
+from app.repositories.models import ImageJob, PointAccount
 
 asset_context = asset_fixture
 
@@ -172,3 +174,103 @@ async def test_color_endpoint_is_owner_scoped_and_options_are_bound_to_the_quote
         assert (await client.get(url)).status_code == 401
         await login(client, other.email)
         assert (await client.get(url)).status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["transparent", "opaque"])
+async def test_print_quotes_accept_output_sizes_without_a_background_color(asset_context, mode):
+    owner = await seed_user(asset_context, email="print-size-quote@example.test")
+    async with client_for(asset_context, "print-size-quote") as client:
+        await login(client, owner.email)
+        asset = (await upload(client, garment("#245EAA"))).json()["asset"]
+        prices = []
+        for size in (None, "2048x2048", "2048x3072", "3072x2048", "3072x3072"):
+            parameters = {"quality": "high", "output_mode": mode}
+            if size is not None:
+                parameters["output_size"] = size
+            response = await client.post(
+                "/api/v1/jobs/quote",
+                json={
+                    "operation_code": "ai.extract_print",
+                    "source_asset_id": asset["id"],
+                    "parameters": parameters,
+                },
+            )
+            assert response.status_code == 201, response.text
+            prices.append(response.json()["quote"]["final_points"])
+        assert len(set(prices)) == 1
+
+
+@pytest.mark.asyncio
+async def test_print_quotes_reject_unsupported_output_sizes_without_charging(asset_context):
+    owner = await seed_user(asset_context, email="print-size-invalid@example.test")
+    async with client_for(asset_context, "print-size-invalid") as client:
+        await login(client, owner.email)
+        asset = (await upload(client, garment("#000000"))).json()["asset"]
+        for size in ("1024x1024", "4096x4096", "2048x0", "auto", "2048X3072", "", 2048, [], {}):
+            response = await client.post(
+                "/api/v1/jobs/quote",
+                json={
+                    "operation_code": "ai.extract_print",
+                    "source_asset_id": asset["id"],
+                    "parameters": {"output_size": size},
+                },
+            )
+            assert response.status_code == 422, (size, response.text)
+            assert response.json()["code"] == "INVALID_OPERATION_PARAMETERS"
+    async with asset_context.database.session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(ImageJob)) == 0
+        assert (
+            await session.scalar(
+                select(PointAccount.balance).where(PointAccount.user_id == owner.id)
+            )
+            == 200
+        )
+
+
+@pytest.mark.asyncio
+async def test_print_size_and_inferred_background_are_bound_to_the_quote(asset_context):
+    owner = await seed_user(asset_context, email="print-size-tamper@example.test")
+    parameters = {"output_size": "2048x3072", "output_mode": "transparent", "quality": "high"}
+    async with client_for(asset_context, "print-size-tamper") as client:
+        await login(client, owner.email)
+        asset = (await upload(client, garment("#000000"))).json()["asset"]
+        response = await client.post(
+            "/api/v1/jobs/quote",
+            json={
+                "operation_code": "ai.extract_print",
+                "source_asset_id": asset["id"],
+                "parameters": parameters,
+            },
+        )
+        assert response.status_code == 201, response.text
+        quote = response.json()["quote"]
+        changes = [
+            {**parameters, "output_size": "3072x2048"},
+            {key: value for key, value in parameters.items() if key != "output_size"},
+            {**parameters, "output_size": None},
+            {**parameters, "background_color": "#FFFFFF"},
+            {**parameters, "output_mode": "opaque"},
+        ]
+        for index, changed in enumerate(changes):
+            response = await client.post(
+                "/api/v1/jobs",
+                headers={"Idempotency-Key": f"print-size-tamper-{index}"},
+                json={"quote_id": quote["id"], "parameters": changed},
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()["code"] == "JOB_QUOTE_MISMATCH"
+        async with asset_context.database.session_factory() as session:
+            assert await session.scalar(select(func.count()).select_from(ImageJob)) == 0
+            assert (
+                await session.scalar(
+                    select(PointAccount.balance).where(PointAccount.user_id == owner.id)
+                )
+                == 200
+            )
+        response = await client.post(
+            "/api/v1/jobs",
+            headers={"Idempotency-Key": "print-size-unchanged"},
+            json={"quote_id": quote["id"], "parameters": parameters},
+        )
+        assert response.status_code == 201, response.text

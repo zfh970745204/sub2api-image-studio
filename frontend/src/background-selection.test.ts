@@ -86,4 +86,26 @@ describe("editable background selection", () => {
     model.apply({ type: "wand", x: 0, y: 0, tolerance: 100, contiguous: false, mode: "restore" });
     expect(model.alpha[0]).toBe(0);
   });
+
+  it("safely shares identical source/result pixels and reuses a full-size render buffer across edits and undo", () => {
+    const source = new Uint8ClampedArray([220,180,40,255, 10,30,40,128, 0,0,0,0]);
+    const original = source.slice();
+    const model = new BackgroundSelection(3, 1, source, source, true);
+    const buffer = new Uint8ClampedArray(source.length);
+    remove(model, 0, 0);
+    const edited = model.render(0, buffer);
+    expect(edited.pixels).toBe(buffer);
+    expect(Array.from(buffer)).toEqual([220,180,40,0, 10,30,40,128, 0,0,0,0]);
+    expect(source).toEqual(original);
+    model.apply({ type: "undo" });
+    expect(model.render(0, buffer).pixels).toBe(buffer);
+    expect(buffer).toEqual(original);
+    model.apply({ type: "redo" });
+    model.apply({ type: "wand", x: 0, y: 0, tolerance: 0, contiguous: true, mode: "restore" });
+    expect(model.render(0, buffer).pixels).toEqual(original);
+    expect(source).toEqual(original);
+    expect(() => model.render(0, source)).toThrow("缓冲区");
+    expect(() => model.render(0, new Uint8ClampedArray(source.buffer))).toThrow("缓冲区");
+    expect(() => model.render(0, new Uint8ClampedArray(4))).toThrow("缓冲区");
+  });
 });

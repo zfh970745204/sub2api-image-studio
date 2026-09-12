@@ -119,6 +119,7 @@ async def execute_image_job(ctx: dict[str, Any], job_id: str) -> dict[str, Any]:
             job_id=parsed_job_id,
             worker_id=runtime.instance_name,
             request_id=request_id,
+            system_concurrency_limit=ctx.get("settings", settings).worker_max_jobs,
         )
         await session.commit()
     if claim is None:

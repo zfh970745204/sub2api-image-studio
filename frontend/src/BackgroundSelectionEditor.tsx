@@ -1,18 +1,26 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, selectionPixels, type Asset, type SelectionContext } from "./user-api";
 import type { SelectionCommand, SelectionReply } from "./background-selection.worker";
 import "./background-selection.css";
 
 type FrameState = { canUndo: boolean; canRedo: boolean; canRetune: boolean; removed: number; visible: number };
+const MIN_ZOOM = .25;
+const MAX_ZOOM = 8;
+const ZOOM_PRESETS = [.25, .5, 1, 1.5, 2, 4, 8];
+const zoomLabel = (value: number) => `${Math.round(value * 1000) / 10}%`;
 
-export function BackgroundSelectionEditor({ asset, onClose, onSaved }: { asset: Asset; onClose: () => void; onSaved: (asset: Asset) => void }) {
+export function BackgroundSelectionEditor({ asset, previewUrl, onClose, onSaved }: { asset: Asset; previewUrl?: string | null; onClose: () => void; onSaved: (asset: Asset) => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const sourceCanvas = useRef<HTMLCanvasElement>(null);
   const overlayCanvas = useRef<HTMLCanvasElement>(null);
   const resultCanvas = useRef<HTMLCanvasElement>(null);
   const sourceViewport = useRef<HTMLDivElement>(null);
   const resultViewport = useRef<HTMLDivElement>(null);
+  const sourceImage = useRef<HTMLDivElement>(null);
+  const resultImage = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(1);
+  const zoomAnchor = useRef<{ x: number; y: number; offsetX: number; offsetY: number; viewport: HTMLDivElement } | null>(null);
   const worker = useRef<Worker | null>(null);
   const working = useRef(true);
   const queued = useRef<SelectionCommand | null>(null);
@@ -37,30 +45,96 @@ export function BackgroundSelectionEditor({ asset, onClose, onSaved }: { asset: 
   const [dirty, setDirty] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [tuning, setTuning] = useState(false);
+  const [failedPreview, setFailedPreview] = useState<string | null>(null);
+  const imageWidth = context?.width || asset.width || 1;
+  const imageHeight = context?.height || asset.height || 1;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = dialog.current!;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     if (element.showModal) element.showModal(); else element.setAttribute("open", "");
-    return () => { element.close?.(); if (previous?.isConnected) previous.focus(); };
+    return () => { document.body.style.overflow = previousOverflow; element.close?.(); if (previous?.isConnected) previous.focus(); };
   }, []);
 
-  useEffect(() => {
-    const viewport = sourceViewport.current;
-    if (!viewport || !context) return;
-    const fit = () => setFitWidth(Math.min(viewport.clientWidth, viewport.clientHeight * context.width / context.height));
+  useLayoutEffect(() => {
+    const viewports = [sourceViewport.current!, resultViewport.current!];
+    const fit = () => {
+      // A horizontal scrollbar must not change the base fit size mid-zoom.
+      const width = Math.min(...viewports.map((viewport) => Math.min(viewport.clientWidth, (viewport.offsetHeight || viewport.clientHeight) * imageWidth / imageHeight)));
+      if (width > 0) setFitWidth(width);
+    };
     fit();
     const observer = new ResizeObserver(fit);
-    observer.observe(viewport);
+    viewports.forEach((viewport) => observer.observe(viewport));
     return () => observer.disconnect();
-  }, [context]);
+  }, [imageWidth, imageHeight]);
+
+  const changeZoom = useCallback((value: number, viewport = sourceViewport.current, clientX?: number, clientY?: number) => {
+    const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
+    if (!viewport || !Number.isFinite(next) || next === zoomRef.current) return;
+    const image = viewport === sourceViewport.current ? sourceImage.current : resultImage.current;
+    const rect = image?.getBoundingClientRect();
+    const bounds = viewport.getBoundingClientRect();
+    const offsetX = clientX === undefined ? viewport.clientWidth / 2 : clientX - bounds.left - viewport.clientLeft;
+    const offsetY = clientY === undefined ? viewport.clientHeight / 2 : clientY - bounds.top - viewport.clientTop;
+    if (rect?.width && rect.height) {
+      zoomAnchor.current = {
+        x: Math.max(0, Math.min(1, (bounds.left + viewport.clientLeft + offsetX - rect.left) / rect.width)),
+        y: Math.max(0, Math.min(1, (bounds.top + viewport.clientTop + offsetY - rect.top) / rect.height)),
+        offsetX, offsetY, viewport,
+      };
+    }
+    zoomRef.current = next;
+    setZoom(next);
+  }, []);
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    if (!anchor) return;
+    zoomAnchor.current = null;
+    const width = fitWidth * zoom;
+    const height = width * imageHeight / imageWidth;
+    // Account for the centered image before it grows wider than its viewport.
+    const left = anchor.x * width + Math.max(0, (anchor.viewport.clientWidth - width) / 2) - anchor.offsetX;
+    const top = anchor.y * height - anchor.offsetY;
+    const viewports = [sourceViewport.current!, resultViewport.current!];
+    const scrollLeft = Math.max(0, Math.min(left, ...viewports.map((viewport) => Math.max(0, width - viewport.clientWidth))));
+    const scrollTop = Math.max(0, Math.min(top, ...viewports.map((viewport) => Math.max(0, height - viewport.clientHeight))));
+    for (const viewport of viewports) { viewport.scrollLeft = scrollLeft; viewport.scrollTop = scrollTop; }
+  }, [zoom, fitWidth, imageWidth, imageHeight]);
+
+  useEffect(() => {
+    const viewports = [sourceViewport.current!, resultViewport.current!];
+    const wheel = (event: WheelEvent) => {
+      // React's delegated wheel listener is passive. Cancel natively so neither
+      // the viewport nor the page scrolls, including when zoom reaches a limit.
+      event.preventDefault();
+      event.stopPropagation();
+      const viewport = event.currentTarget as HTMLDivElement;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1;
+      const delta = Math.max(-500, Math.min(500, event.deltaY * unit));
+      changeZoom(zoomRef.current * Math.exp(-delta * .002), viewport, event.clientX, event.clientY);
+    };
+    viewports.forEach((viewport) => viewport.addEventListener("wheel", wheel, { passive: false }));
+    return () => viewports.forEach((viewport) => viewport.removeEventListener("wheel", wheel));
+  }, [changeZoom]);
+
+  function syncScroll(viewport: HTMLDivElement, other: HTMLDivElement | null) {
+    if (!other) return;
+    if (other.scrollLeft !== viewport.scrollLeft) other.scrollLeft = viewport.scrollLeft;
+    if (other.scrollTop !== viewport.scrollTop) other.scrollTop = viewport.scrollTop;
+  }
 
   useEffect(() => {
     let alive = true;
     const abort = new AbortController();
     let instance: Worker | null = null;
     setError(""); setContext(null); setFrame(null); setProcessing(true); setDirty(false);
-    setEdge(0); setTuning(false); queued.current = null; working.current = true;
+    setEdge(0); setTuning(false); setZoom(1); zoomRef.current = 1; zoomAnchor.current = null;
+    setFailedPreview(null); queued.current = null; working.current = true;
+    for (const viewport of [sourceViewport.current, resultViewport.current]) if (viewport) { viewport.scrollLeft = 0; viewport.scrollTop = 0; }
     const fail = (message: string) => {
       working.current = false; queued.current = null; savingRef.current = false;
       setProcessing(false); setSaving(false); setError(message);
@@ -68,10 +142,7 @@ export function BackgroundSelectionEditor({ asset, onClose, onSaved }: { asset: 
     async function load() {
       try {
         if (!window.Worker || !window.OffscreenCanvas || !window.createImageBitmap) throw new Error("当前浏览器不支持选区修边，请使用新版 Chrome、Edge 或 Firefox");
-        const next = await api.selection(asset.id);
-        const [source, result] = await Promise.all([selectionPixels(next.source_url, abort.signal), selectionPixels(next.result_url, abort.signal)]);
-        if (!alive) return;
-        setContext(next);
+        // Start the worker while metadata and PNG bytes are being fetched.
         instance = new Worker(new URL("./background-selection.worker.ts", import.meta.url), { type: "module" });
         worker.current = instance;
         instance.onerror = () => { if (alive) { instance?.terminate(); worker.current = null; setFrame(null); fail("选区处理器异常，请重新载入；大图可先缩小后重试"); } };
@@ -91,8 +162,11 @@ export function BackgroundSelectionEditor({ asset, onClose, onSaved }: { asset: 
           const paint = (target: HTMLCanvasElement | null, bitmap?: ImageBitmap) => {
             if (!bitmap) return;
             if (target) {
-              target.width = bitmap.width; target.height = bitmap.height;
-              target.getContext("2d")?.drawImage(bitmap, 0, 0);
+              if (target.width !== bitmap.width) target.width = bitmap.width;
+              if (target.height !== bitmap.height) target.height = bitmap.height;
+              const ctx = target.getContext("2d");
+              ctx?.clearRect(0, 0, target.width, target.height);
+              ctx?.drawImage(bitmap, 0, 0);
             }
             bitmap.close();
           };
@@ -103,6 +177,14 @@ export function BackgroundSelectionEditor({ asset, onClose, onSaved }: { asset: 
           if (nextCommand) instance?.postMessage(nextCommand);
           else { working.current = false; setProcessing(false); }
         };
+        const next = await api.selection(asset.id);
+        if (!alive) return;
+        setContext(next);
+        const [source, result] = await Promise.all([
+          selectionPixels(next.source_url, abort.signal),
+          next.source_url === next.result_url ? undefined : selectionPixels(next.result_url, abort.signal),
+        ]);
+        if (!alive) return;
         instance.postMessage({ type: "init", source, result, width: next.width, height: next.height, hasSelection: next.has_initial_selection } satisfies SelectionCommand);
       } catch (reason) { if (alive) fail(reason instanceof Error ? reason.message : "修边图片读取失败"); }
     }
@@ -140,15 +222,27 @@ export function BackgroundSelectionEditor({ asset, onClose, onSaved }: { asset: 
       <div><button type="button" disabled={disabled || !frame?.canUndo} onClick={() => send({ type: "action", action: { type: "undo" } })}>撤销</button><button type="button" disabled={disabled || !frame?.canRedo} onClick={() => send({ type: "action", action: { type: "redo" } })}>重做</button><button type="button" disabled={disabled} onClick={() => send({ type: "action", action: { type: "auto" } })}>补选外围背景</button><button type="button" disabled={disabled} onClick={() => { setEdge(0); send({ type: "action", action: { type: "reset" } }); }}>重置初始选区</button><button type="button" disabled={disabled} onClick={() => { setEdge(0); send({ type: "action", action: { type: "clear" } }); }}>取消全部选区</button></div>
       <label>边缘收缩 <select aria-label="边缘收缩" value={edge} disabled={disabled} onChange={(event) => { const value = Number(event.target.value); setEdge(value); send({ type: "edge", value }); }}>{[0, 1, 2, 3].map((n) => <option key={n} value={n}>{n} 像素</option>)}</select></label>
     </div>
-    <div className={`selection-panes selection-bg-${background}`}>
-      <section><h3>选区 · {mode === "remove" ? "点击删除背景" : "点击保留内容"}</h3><div ref={sourceViewport} className="selection-viewport" onScroll={(event) => { if (resultViewport.current) { resultViewport.current.scrollLeft = event.currentTarget.scrollLeft; resultViewport.current.scrollTop = event.currentTarget.scrollTop; } }}><div className="selection-image" style={{ width: fitWidth * zoom, aspectRatio: context ? `${context.width}/${context.height}` : "1" }}><canvas ref={sourceCanvas} aria-label="去底前原图" /><canvas ref={overlayCanvas} className="selection-overlay" style={{ opacity: showSelection ? 1 : 0 }} aria-label="点击图片编辑背景选区" onPointerDown={(event) => {
+    <div className={`selection-panes selection-bg-${background}`} aria-busy={!frame}>
+      <section><h3>选区 · {mode === "remove" ? "点击删除背景" : "点击保留内容"}</h3><div ref={sourceViewport} className="selection-viewport" aria-label="选区画布" onScroll={(event) => syncScroll(event.currentTarget, resultViewport.current)}><div ref={sourceImage} className="selection-image" data-ready={Boolean(frame)} style={{ width: fitWidth * zoom, aspectRatio: `${imageWidth}/${imageHeight}` }}>
+        {!frame && <div className="selection-placeholder">{processing ? "正在载入原尺寸图片…" : "原图尚未载入"}</div>}
+        <canvas ref={sourceCanvas} aria-label="去底前原图" /><canvas ref={overlayCanvas} className="selection-overlay" style={{ opacity: showSelection ? 1 : 0 }} aria-label="点击图片编辑背景选区" onPointerDown={(event) => {
         if (disabled || event.button !== 0 || !context) return;
         const rect = event.currentTarget.getBoundingClientRect();
         send({ type: "action", action: { type: "wand", x: (event.clientX - rect.left) / rect.width * context.width, y: (event.clientY - rect.top) / rect.height * context.height, tolerance, contiguous, mode } });
       }} /></div></div></section>
-      <section><h3>实时预览 · 透明 PNG</h3><div ref={resultViewport} className="selection-viewport" onScroll={(event) => { if (sourceViewport.current) { sourceViewport.current.scrollLeft = event.currentTarget.scrollLeft; sourceViewport.current.scrollTop = event.currentTarget.scrollTop; } }}><div className="selection-image" style={{ width: fitWidth * zoom, aspectRatio: context ? `${context.width}/${context.height}` : "1" }}><canvas ref={resultCanvas} aria-label="去掉选区后的实时预览" /></div></div></section>
+      <section><h3>实时预览 · 透明 PNG</h3><div ref={resultViewport} className="selection-viewport" aria-label="结果画布" onScroll={(event) => syncScroll(event.currentTarget, sourceViewport.current)}><div ref={resultImage} className="selection-image" data-ready={Boolean(frame)} style={{ width: fitWidth * zoom, aspectRatio: `${imageWidth}/${imageHeight}` }}>
+        {!frame && (previewUrl && failedPreview !== previewUrl ? <><img className="selection-loading-preview" src={previewUrl} alt="已有结果预览" onError={() => setFailedPreview(previewUrl)} /><span className="selection-preview-caption">已有预览 · 原图载入后可编辑</span></> : <div className="selection-placeholder">{processing ? "正在准备透明预览…" : "预览尚未载入"}</div>)}
+        <canvas ref={resultCanvas} aria-label="去掉选区后的实时预览" /></div></div></section>
     </div>
-    <div className="selection-view-controls"><label>放大检查 <select aria-label="修边预览缩放" value={zoom} onChange={(event) => setZoom(Number(event.target.value))}>{[[1, "适合画布"], [1.5, "150%"], [2, "200%"], [4, "400%"]].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>预览底色 <select aria-label="修边预览底色" value={background} onChange={(event) => setBackground(event.target.value)}><option value="checker">透明棋盘格</option><option value="white">白色</option><option value="dark">黑色</option></select></label><span role="status">{saving ? "正在保存原尺寸 PNG…" : processing || tuning ? frame ? "正在更新选区与预览…" : "正在载入原图与智能选区…" : context && frame ? `${context.width} × ${context.height} · 已选 ${Math.round(frame.removed / (context.width * context.height) * 1000) / 10}%` : "载入未完成"}</span></div>
+    <div className="selection-view-controls"><div className="selection-zoom" role="group" aria-label="画布同步缩放">
+      <button type="button" aria-label="缩小修边预览" disabled={zoom <= MIN_ZOOM} onClick={() => changeZoom(zoomRef.current / 1.25)}>−</button>
+      <label>缩放 <select aria-label="修边预览缩放" title="相对适合画布的缩放比例" value={zoom} onChange={(event) => changeZoom(Number(event.target.value))}>
+        {!ZOOM_PRESETS.includes(zoom) && <option value={zoom}>{zoomLabel(zoom)}</option>}
+        {ZOOM_PRESETS.map((value) => <option key={value} value={value}>{value === 1 ? "适合画布" : zoomLabel(value)}</option>)}
+      </select></label>
+      <button type="button" aria-label="放大修边预览" disabled={zoom >= MAX_ZOOM} onClick={() => changeZoom(zoomRef.current * 1.25)}>＋</button>
+    </div><label>预览底色 <select aria-label="修边预览底色" value={background} onChange={(event) => setBackground(event.target.value)}><option value="checker">透明棋盘格</option><option value="white">白色</option><option value="dark">黑色</option></select></label><span role="status">{saving ? "正在保存原尺寸 PNG…" : processing || tuning ? frame ? "正在更新选区与预览…" : "正在载入原图与智能选区…" : context && frame ? `${context.width} × ${context.height} · 已选 ${Math.round(frame.removed / (context.width * context.height) * 1000) / 10}%` : "载入未完成"}</span></div>
+    <p className="selection-hint">在任一画布内滚动滚轮，以指针为中心同步缩放；拖动滚动条平移。缩放和预览底色不影响保存尺寸。</p>
     <p className="selection-hint">{frame?.canRetune ? "拖动容差会重新计算上次点击的范围，不会累积误删。" : "先显示已有抠图选区；原图会尝试识别相连的单色外围背景。"} 取消“只选相连区域”可一次选中全图同色区域，请检查图案内部。细边可尝试收缩 1 像素。</p>
     {error && <p role="alert" className="selection-error">{error} {!frame && <button type="button" onClick={() => setRetry((n) => n + 1)}>重新载入</button>}</p>}
     {confirmClose && <div className="selection-warning">修边尚未保存。<button type="button" onClick={() => setConfirmClose(false)}>继续修边</button><button type="button" onClick={onClose}>放弃修改并关闭</button></div>}

@@ -109,6 +109,7 @@ async def _asset_page(
     created_day: date | None = None,
     job_query: str | None = None,
     root_query: str | None = None,
+    editable_only: bool = False,
 ) -> tuple[list[Asset], str | None]:
     _validate_filters(kind, status_filter)
     anchor = None
@@ -124,6 +125,11 @@ async def _asset_page(
         anchor=anchor,
         order=order,
     )
+    if editable_only:
+        statement = statement.where(
+            Asset.kind.in_({"original", "result"}),
+            Asset.mime_type.in_({"image/png", "image/jpeg", "image/webp"}),
+        )
     if created_day is not None:
         start = datetime.combine(created_day, datetime.min.time(), tzinfo=UTC)
         statement = statement.where(
@@ -227,6 +233,7 @@ async def list_assets(
     root_query: str | None = Query(default=None, max_length=36),
     status_filter: str = Query(default="ready", alias="status"),
     limit: int = Query(default=30, ge=1, le=100),
+    editable_only: bool = False,
 ) -> dict[str, Any]:
     database = request.app.state.runtime_services.database
     async with database.session_factory() as session:
@@ -241,6 +248,7 @@ async def list_assets(
             created_day=created_day,
             job_query=job_query,
             root_query=root_query,
+            editable_only=editable_only,
         )
     return {"items": [asset_payload(item) for item in items], "next_cursor": next_cursor}
 
@@ -346,12 +354,13 @@ async def get_selection_context(
     asset_id: uuid.UUID, request: Request, principal: AssetReader
 ) -> dict[str, Any]:
     async with request.app.state.runtime_services.database.session_factory() as session:
-        asset, _, limited = await _selection_source(session, asset_id, principal.user_id)
+        asset, source_key, limited = await _selection_source(session, asset_id, principal.user_id)
     return {
         "width": asset.width,
         "height": asset.height,
         "restore_limited": limited,
-        "source_url": f"/api/v1/assets/{asset_id}/selection/source",
+        "source_url": f"/api/v1/assets/{asset_id}/selection/"
+        + ("result" if source_key == asset.object_key else "source"),
         "result_url": f"/api/v1/assets/{asset_id}/selection/result",
         "has_initial_selection": asset.operation_code
         in {
@@ -374,15 +383,18 @@ async def get_selection_pixels(
         key = source_key if layer == "source" else asset.object_key
     try:
         raw = await _storage(request).get_object(key)
-        # Canonical PNG also applies EXIF orientation for legacy JPEG parents.
-        prepared = await asyncio.to_thread(prepare_asset, raw, kind="original", max_megapixels=16)
+        # Stored PNGs are canonical already. Re-encoding multi-megapixel images
+        # on every editor open wastes seconds before the browser can decode them.
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            prepared = await asyncio.to_thread(
+                prepare_asset, raw, kind="original", max_megapixels=16
+            )
+            raw = prepared.data  # Orient legacy JPEG/WebP sources once per request.
     except ObjectStorageError as exc:
         raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "修边图片暂时无法读取，请重试") from exc
     except AssetInputError as exc:
         raise ApiError(422, "INVALID_SELECTION_SOURCE", str(exc)) from exc
-    return Response(
-        prepared.data, media_type="image/png", headers={"Cache-Control": "private, no-store"}
-    )
+    return Response(raw, media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
 
 def _validate_selection_result(raw: bytes, width: int, height: int, max_megapixels: int):

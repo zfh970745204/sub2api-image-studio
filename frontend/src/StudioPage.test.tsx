@@ -76,31 +76,101 @@ describe("Studio task workflow", () => {
     return screen.findByRole("dialog", { name: "任务报价" });
   }
 
-  it("quotes and submits the chosen print mode and corrected product color", async () => {
+  it("uses the full original selected on the picker's second page for preview and the submitted quote", async () => {
+    const first = { ...result, original_filename: "已有结果.png" };
+    const original = { ...result, id: "source-1", kind: "original", operation_code: "upload", original_filename: "第二页原图.png", width: 1536, height: 1024 };
+    sourceAssets = [first];
+    const originalFetch = fetchMock.getMockImplementation()! as (url: string, init?: RequestInit) => Promise<Response>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const query = new URL(url, "http://localhost").searchParams;
+      if (url.startsWith("/api/v1/assets?") && query.get("editable_only") === "true") {
+        return Promise.resolve(response(query.get("cursor") === "picker-next"
+          ? { items: [original], next_cursor: null }
+          : { items: [first], next_cursor: "picker-next" }));
+      }
+      return originalFetch(url, init);
+    });
+    window.history.replaceState({}, "", "/app/studio?tool=ai.redraw");
+    render(<UserApp />);
+    const openPicker = await screen.findByRole("button", { name: "从素材库选择图片" });
+    await waitFor(() => expect(openPicker).toBeEnabled());
+    fireEvent.click(openPicker);
+    const picker = await screen.findByRole("dialog", { name: "选择来源素材" });
+    await within(picker).findByRole("button", { name: "选择 已有结果.png" });
+    fireEvent.click(within(picker).getByRole("button", { name: "下一页" }));
+    fireEvent.click(await within(picker).findByRole("button", { name: "选择 第二页原图.png" }));
+    fireEvent.click(within(picker).getByRole("button", { name: "确认选择" }));
+
+    expect(screen.queryByRole("dialog", { name: "选择来源素材" })).not.toBeInTheDocument();
+    expect(openPicker).toHaveTextContent(original.original_filename);
+    expect(openPicker).toHaveTextContent("1536 × 1024");
+    expect(await screen.findByRole("img", { name: "来源素材预览" })).toHaveAttribute("src", "/original-image.png");
+    expect(sourceRead).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: /补充要求/ }), { target: { value: "保留原图构图" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
+    const dialog = await screen.findByRole("dialog", { name: "任务报价" });
+    const quoteRequest = JSON.parse(String(fetchMock.mock.calls.find(([url]) => url === "/api/v1/jobs/quote")![1]?.body));
+    expect(quoteRequest).toMatchObject({ operation_code: "ai.redraw", source_asset_id: original.id, parameters: { instruction: "保留原图构图", size: "auto" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(submit.mock.calls[0][1]?.body))).toEqual({ quote_id: quote.id, parameters: quoteRequest.parameters });
+  });
+
+  it("binds a reference chosen in the picker to both the quote and submitted reference_asset_ids", async () => {
+    const reference = { ...result, id: "reference-1", kind: "original", operation_code: "upload", original_filename: "灵感参考.png" };
+    sourceAssets = [reference];
+    render(<UserApp />);
+    const openPicker = await screen.findByRole("button", { name: "从素材库添加参考图" });
+    await waitFor(() => expect(openPicker).toBeEnabled());
+    fireEvent.click(openPicker);
+    const picker = await screen.findByRole("dialog", { name: "从素材库添加参考图" });
+    fireEvent.click(await within(picker).findByRole("button", { name: "选择 灵感参考.png" }));
+    fireEvent.click(within(picker).getByRole("button", { name: "确认选择" }));
+
+    expect(screen.queryByRole("dialog", { name: "从素材库添加参考图" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("button", { name: "查看参考图 1" })).getByRole("img")).toHaveAttribute("src", "/api/v1/assets/reference-1/thumbnail");
+    fireEvent.change(screen.getByRole("textbox", { name: /图片描述/ }), { target: { value: "沿用参考图的配色" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
+    const dialog = await screen.findByRole("dialog", { name: "任务报价" });
+    const quoteRequest = JSON.parse(String(fetchMock.mock.calls.find(([url]) => url === "/api/v1/jobs/quote")![1]?.body));
+    expect(quoteRequest).toMatchObject({ operation_code: "ai.generate", source_asset_id: reference.id, parameters: { prompt: "沿用参考图的配色", reference_asset_ids: [reference.id] } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(submit.mock.calls[0][1]?.body))).toEqual({ quote_id: quote.id, parameters: quoteRequest.parameters });
+  });
+
+  it("quotes print mode and output size while preview color stays local", async () => {
     window.history.replaceState({}, "", "/app/studio?source=source-1&tool=ai.extract_print");
     render(<UserApp />);
-    await screen.findByText(/已估计产品底色/);
+    await waitFor(() => expect(screen.getByRole("button", { name: "开始创作" })).toBeEnabled());
     expect(screen.getByRole("button", { name: "透明背景" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("combobox", { name: "输出尺寸" })).toHaveValue("2048x2048");
     fireEvent.click(screen.getByRole("button", { name: "原产品底色（不透明）" }));
-    fireEvent.change(screen.getByLabelText("产品底色"), { target: { value: "#245eaa" } });
+    fireEvent.change(screen.getByLabelText("自定义背景色"), { target: { value: "#245eaa" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "输出尺寸" }), { target: { value: "2048x3072" } });
     fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
     const dialog = await screen.findByRole("dialog", { name: "任务报价" });
     expect(within(dialog).getByText("原产品底色（不透明）")).toBeInTheDocument();
-    expect(within(dialog).getByText("#245EAA")).toBeInTheDocument();
+    expect(within(dialog).getByText("2048 × 3072")).toBeInTheDocument();
+    expect(within(dialog).queryByText("产品底色")).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" }));
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(String(submit.mock.calls[0][1]?.body)).parameters).toMatchObject({ output_mode: "opaque", background_color: "#245EAA" });
+    const parameters = JSON.parse(String(submit.mock.calls[0][1]?.body)).parameters;
+    expect(parameters).toMatchObject({ output_mode: "opaque", output_size: "2048x3072" });
+    expect(parameters).not.toHaveProperty("background_color");
+    expect(fetchMock.mock.calls.some(([url]) => url.includes("/print-background"))).toBe(false);
     expect(fetchMock.mock.calls.some(([url, init]) => url === "/api/v1/me/preferences" && String(init?.body).includes('"print_output_mode":"opaque"'))).toBe(true);
   });
 
-  it("restores print mode and product color without replacing them with a new estimate", async () => {
-    restoredJob = { ...job, operation_code: "ai.extract_print", source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: { output_mode: "opaque", background_color: "#245EAA", quality: "high" } };
+  it("restores print mode and export size independently from preview color", async () => {
+    restoredJob = { ...job, operation_code: "ai.extract_print", source_asset_id: "source-1", output_asset_id: result.id, status: "succeeded", parameters: { output_mode: "opaque", output_size: "3072x2048", background_color: "#245EAA", quality: "high" } };
     events.mockImplementation(async () => response({ job: restoredJob }));
     window.history.replaceState({}, "", "/app/studio?job=job-1");
     render(<UserApp />);
     await screen.findByRole("img", { name: "图片任务结果" });
     expect(screen.getByRole("button", { name: "原产品底色（不透明）" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("产品底色")).toHaveValue("#245eaa");
+    expect(screen.getByRole("combobox", { name: "输出尺寸" })).toHaveValue("3072x2048");
+    expect(screen.getByLabelText("自定义背景色")).toHaveValue("#e8c7b5");
     expect(fetchMock.mock.calls.some(([url]) => url.includes("/print-background"))).toBe(false);
   });
 
@@ -145,6 +215,45 @@ describe("Studio task workflow", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("req-test-123");
     expect(within(dialog).getByRole("button", { name: "重试提交" })).toBeEnabled();
+  });
+
+  it("accepts another task while the first runs and keeps late results out of the new draft", async () => {
+    const secondJob = { ...job, id: "job-2", status: "queued" };
+    const originalFetch = fetchMock.getMockImplementation()! as (url: string, init?: RequestInit) => Promise<Response>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => url === "/api/v1/jobs/job-2/events" ? Promise.resolve(response({ job: secondJob, next_poll_after_ms: 2000 })) : originalFetch(url, init));
+    submit.mockResolvedValueOnce(response({ job: { ...job, status: "running" }, dispatched: true }));
+    submit.mockResolvedValueOnce(response({ job: secondJob, dispatched: true }));
+    events.mockImplementation(async () => response({ job: { ...job, status: "running" }, next_poll_after_ms: 2000 }));
+    const dialog = await prepare();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "开始创作" })).toBeEnabled();
+    fireEvent.change(screen.getByRole("textbox", { name: /图片描述/ }), { target: { value: "第二张：花朵" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "任务报价" })).getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "查看任务 job-1" })).toHaveTextContent("执行中");
+    expect(screen.getByRole("button", { name: "查看任务 job-2" })).toHaveTextContent("排队中");
+    events.mockImplementation(async () => response({ job: { ...job, status: "succeeded", output_asset_id: result.id } }));
+    // Change tools to detach the second job too; the first keeps its own status row.
+    fireEvent.click(screen.getByRole("button", { name: "高清重绘" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看任务 job-1" })).toHaveTextContent("已完成"), { timeout: 4500 });
+    expect(screen.queryByRole("img", { name: "图片任务结果" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /补充要求/ })).toHaveValue("第二张：花朵");
+  });
+
+  it("ignores an in-flight focused result after editing the next draft", async () => {
+    let deliver!: (value: Response) => void;
+    events.mockImplementationOnce(() => new Promise((resolve) => { deliver = resolve; }));
+    const dialog = await prepare();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(events).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByRole("textbox", { name: /图片描述/ }), { target: { value: "新草稿" } });
+    await act(async () => { deliver(response({ job: { ...job, status: "succeeded", output_asset_id: result.id } })); });
+    expect(screen.getByRole("textbox", { name: /图片描述/ })).toHaveValue("新草稿");
+    expect(screen.queryByRole("img", { name: "图片任务结果" })).not.toBeInTheDocument();
+    expect(assetRead).not.toHaveBeenCalled();
   });
 
   it("asks for a fresh quote after expiry and preserves the creative input", async () => {
@@ -202,7 +311,8 @@ describe("Studio task workflow", () => {
     render(<UserApp />);
     expect(await screen.findByRole("textbox", { name: /补充要求/ })).toHaveValue("保留原来的字体");
     expect(await screen.findByRole("img", { name: "来源素材预览" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "正在处理图片" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始创作" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: /补充要求/ })).toBeEnabled();
     expect(submit).not.toHaveBeenCalled();
   });
 

@@ -6,7 +6,8 @@ import { JobProgress } from "./JobProgress";
 import { estimatedPoints, jobOutputIds, downloadJob, uploadAssets } from "./user-api";
 import { BusyDialog } from "./BusyDialog";
 import { usePageVisible } from "./usePageVisible";
-import { PrintBackgroundControls } from "./PrintBackgroundControls";
+import { AssetPickerDialog } from "./AssetPickerDialog";
+import { StudioTaskQueue } from "./StudioTaskQueue";
 import { BackgroundSelectionEditor } from "./BackgroundSelectionEditor";
 import {
   AlertCircle,
@@ -712,6 +713,7 @@ function DashboardPage({ bootstrap }: { bootstrap: BootstrapData }) {
 
 interface StudioFormState {
   printOutputMode: "transparent" | "opaque";
+  printOutputSize: string;
   platform: string;
   imageCount: number;
   prompt: string;
@@ -741,8 +743,9 @@ function StudioPage({
   const [batchResults, setBatchResults] = useState<Asset[]>([]);
   const [downloadingBatch, setDownloadingBatch] = useState(false);
   const [maskId, setMaskId] = useState("");
-  const [form, setForm] = useState<StudioFormState>({
+  const [form, setFormState] = useState<StudioFormState>({
     printOutputMode: bootstrap.preferences.studio_layout.print_output_mode || "transparent",
+    printOutputSize: "2048x2048",
     platform: "amazon",
     imageCount: 4,
     prompt: "",
@@ -752,8 +755,7 @@ function StudioPage({
     color: "#171c1b",
     maxColors: 6,
   });
-  const [printBackground, setPrintBackground] = useState({ sourceId: "", color: "" });
-  const productColor = printBackground.sourceId === sourceId ? printBackground.color : "";
+  const [assetPicker, setAssetPicker] = useState<"source" | "reference" | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
   const quoteParameters = useRef<Record<string, unknown>>({});
   const submitting = useRef(false);
@@ -772,6 +774,8 @@ function StudioPage({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [activeJob, setActiveJob] = useState<ImageJob | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
+  const [trackedJobs, setTrackedJobs] = useState<ImageJob[]>([]);
   const [resultAsset, setResultAsset] = useState<Asset | null>(null);
   const [selectionAsset, setSelectionAsset] = useState<Asset | null>(null);
   const [lineage, setLineage] = useState<Asset[]>([]);
@@ -835,15 +839,32 @@ function StudioPage({
   const providerUnavailable =
     selectedOperation?.engine_type === "sub2api" &&
     !bootstrap.service.features.sub2api_configured;
-  const jobRunning = Boolean(activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status));
-  const selectableAssets = assets.filter((item) => item.status === "ready" && !["mask", "thumbnail", "vector"].includes(item.kind));
+  function trackJob(job: ImageJob) {
+    setTrackedJobs((items) => items.some((item) => item.id === job.id) ? items.map((item) => item.id === job.id ? job : item) : [job, ...items]);
+  }
 
-  useEffect(() => {
-    if (operationCode === "ai.extract_print" && productColor) {
-      setPreviewMode("color");
-      setPreviewColor(productColor);
-    }
-  }, [operationCode, productColor]);
+  function detachJob() {
+    activeJobIdRef.current = null;
+    setActiveJob(null);
+    setPollError("");
+  }
+
+  function setForm(value: StudioFormState) {
+    detachJob();
+    setQuote(null);
+    setFormState(value);
+  }
+
+  function chooseSource(asset: Asset) {
+    detachJob();
+    setAssets((items) => [asset, ...items.filter((item) => item.id !== asset.id)]);
+    setSourceId(asset.id);
+    setResultAsset(null);
+    setBatchResults([]);
+    setMaskId("");
+    setMaskRevision((value) => value + 1);
+    setQuote(null);
+  }
 
   function refreshBalance() {
     void api.pointBalance().then(({ account }) => onBootstrap({ ...bootstrapRef.current, points: account })).catch(() => undefined);
@@ -870,14 +891,14 @@ function StudioPage({
         const refs = Array.isArray(job.parameters.reference_asset_ids) ? job.parameters.reference_asset_ids.map(String) : job.source_asset_id ? [job.source_asset_id] : [];
         setReferenceIds(refs);
         setSourceId(job.source_asset_id || refs[0] || "");
-        setPrintBackground({ sourceId: job.source_asset_id || "", color: typeof job.parameters.background_color === "string" ? job.parameters.background_color : "" });
         for (const id of refs.filter((id) => id !== job.source_asset_id)) {
           try { const { asset } = await api.asset(id); if (!cancelled) setAssets((current) => [asset, ...current.filter((item) => item.id !== id)]); }
           catch { if (!cancelled) setError("部分参考图已过期或被删除，重新提交前请替换。"); }
         }
-        setForm((current) => ({
+        setFormState((current) => ({
           ...current,
           printOutputMode: job.parameters.output_mode === "opaque" ? "opaque" : "transparent",
+          printOutputSize: String(job.parameters.output_size || "2048x2048"),
           platform: String(job.parameters.platform || "amazon"),
           imageCount: Number(job.parameters.image_count || 4),
           prompt: String(job.parameters.prompt || job.parameters.instruction || ""),
@@ -895,7 +916,7 @@ function StudioPage({
             if (!cancelled) setError(`原图暂不可用，可能已过期或被删除。${messageOf(reason)}`);
           }
         }
-        if (!cancelled) setActiveJob(job);
+        if (!cancelled) { activeJobIdRef.current = job.id; setActiveJob(job); trackJob(job); }
       }).catch((reason) => { if (!cancelled) setError(messageOf(reason, "无法载入任务")); })
         .finally(() => { if (!cancelled) setRestoringJob(false); });
     }
@@ -920,19 +941,20 @@ function StudioPage({
     async function poll() {
       try {
         const { job, next_poll_after_ms } = await api.jobEvents(jobId);
-        if (cancelled) return;
+        if (cancelled || activeJobIdRef.current !== jobId) return;
         // Results are published after the completion transaction. Retry retrieval
         // until available instead of stopping forever at the first 404/503.
         if (job.status === "succeeded" && job.output_asset_id) {
           const results = await Promise.all(jobOutputIds(job).map(async (id) => (await api.asset(id)).asset));
           const asset = results[0];
-          if (cancelled) return;
+          if (cancelled || activeJobIdRef.current !== jobId) return;
           setResultAsset(asset);
           setBatchResults(results);
           setAssets((current) => [...results, ...current.filter((item) => !results.some((output) => output.id === item.id))]);
           setNotice("");
         }
         setActiveJob(job);
+        trackJob(job);
         setPollError("");
         if (["queued", "running", "retry_wait"].includes(job.status)) {
           timer = window.setTimeout(poll, Math.max(1000, next_poll_after_ms || 2000));
@@ -944,7 +966,7 @@ function StudioPage({
           } catch { /* Optional storage. */ }
         }
       } catch (reason) {
-        if (cancelled) return;
+        if (cancelled || activeJobIdRef.current !== jobId) return;
         setPollError(`暂时无法获取任务或结果，正在自动重试。${messageOf(reason)}`);
         timer = window.setTimeout(poll, 4000);
       }
@@ -958,7 +980,7 @@ function StudioPage({
       return { prompt: form.prompt.trim(), size: form.size, quality: form.quality, output_format: "png", reference_asset_ids: referenceIds, ...(operationCode === "ai.ecommerce" ? { platform: form.platform, image_count: form.imageCount } : {}) };
     }
     if (operationCode === "ai.extract_print") {
-      return { instruction: form.prompt.trim(), size: "auto", quality: form.quality, output_mode: form.printOutputMode, background_color: productColor };
+      return { instruction: form.prompt.trim(), output_size: form.printOutputSize, quality: form.quality, output_mode: form.printOutputMode };
     }
     if (operationCode === "ai.redraw" || operationCode === "ai.variant") {
       return { instruction: form.prompt.trim(), size: "auto", quality: form.quality };
@@ -974,7 +996,7 @@ function StudioPage({
 
   async function upload(file?: File) {
     if (!file) return;
-    if (busy || jobRunning) return;
+    if (busy) return;
     if (file.size > bootstrap.membership.entitlements.max_upload_mb * 1024 * 1024) {
       setError(`图片超过当前会员 ${bootstrap.membership.entitlements.max_upload_mb} MB 上传限制。`);
       return;
@@ -984,9 +1006,7 @@ function StudioPage({
     setError("");
     try {
       const payload = await api.uploadAsset(file);
-      setAssets((current) => [payload.asset, ...current]);
-      setSourceId(payload.asset.id);
-      setResultAsset(null);
+      chooseSource(payload.asset);
       if (!meta.source) selectOperation("ai.redraw");
       setNotice("原图已安全上传到素材库。 ");
     } catch (reason) {
@@ -998,11 +1018,12 @@ function StudioPage({
   }
 
   function changeReferences(ids: string[]) {
+    detachJob();
     setReferenceIds(ids); setSourceId(ids[0] || ""); setQuote(null); setResultAsset(null); setBatchResults([]);
   }
 
   async function uploadReferences(files: File[]) {
-    if (busy || jobRunning || !files.length) return;
+    if (busy || !files.length) return;
     if (referenceIds.length + files.length > 6) { setError("最多添加 6 张参考图，可先移除不需要的图片。"); return; }
     if (files.some((file) => file.size > bootstrap.membership.entitlements.max_upload_mb * 1024 * 1024)) { setError("参考图超过会员上传大小限制。"); return; }
     setBusy("upload"); setError("");
@@ -1022,7 +1043,8 @@ function StudioPage({
   }
 
   async function uploadMask(file?: File) {
-    if (!file || busy || jobRunning) return;
+    if (!file || busy) return;
+    detachJob();
     setBusy("mask");
     setError("");
     try {
@@ -1047,10 +1069,6 @@ function StudioPage({
     }
     if (meta.source && !sourceId) {
       setError("请先上传或选择一个来源素材。");
-      return;
-    }
-    if (operationCode === "ai.extract_print" && !/^#[0-9a-f]{6}$/i.test(productColor)) {
-      setError("请等待底色识别完成，或手动确认产品底色。");
       return;
     }
     if (operationCode === "ai.text_fix" && !form.prompt.trim()) {
@@ -1085,12 +1103,14 @@ function StudioPage({
     setError("");
     try {
       const payload = await api.createJob(quote.id, quoteParameters.current);
+      activeJobIdRef.current = payload.job.id;
       setActiveJob(payload.job);
+      trackJob(payload.job);
       setQuote(null);
       setResultAsset(null);
       setBatchResults([]);
       try { sessionStorage.setItem(`studio-job:${bootstrap.user.id}`, payload.job.id); } catch { /* Optional storage. */ }
-      setNotice(payload.dispatched ? "任务已进入处理队列，可继续浏览其他页面。" : "任务已保存，调度器将尽快处理。 ");
+      setNotice("任务已提交，可继续选图和提交下一项；超过同时执行上限的任务会自动排队。");
       refreshBalance();
     } catch (reason) {
       if (reason instanceof ApiError && ["JOB_QUOTE_EXPIRED", "JOB_QUOTE_ALREADY_USED", "JOB_QUOTE_MISMATCH"].includes(reason.code)) setQuote(null);
@@ -1109,7 +1129,7 @@ function StudioPage({
     setResultAsset(null);
     setBatchResults([]);
     if (code === "ai.generate" || code === "ai.ecommerce") { setReferenceIds([]); setSourceId(""); }
-    if (!jobRunning) setActiveJob(null);
+    detachJob();
     api.updatePreferences({ studio_layout: { last_tool: code } }).catch(() => undefined);
   }
 
@@ -1138,29 +1158,30 @@ function StudioPage({
           {operations.map((operation) => {
             const item = OPERATION_META[operation.code] || { label: operation.name, icon: Settings2 };
             const Icon = item.icon;
-            return <button aria-label={item.label} aria-pressed={operationCode === operation.code} disabled={Boolean(busy) || jobRunning} className={operationCode === operation.code ? "active" : ""} key={operation.code} onClick={() => selectOperation(operation.code)} title={`${item.label} · 预计 ${operation.member_base_points ?? operation.current_price?.base_points ?? 0} 积分起`} type="button"><Icon size={19} /><span>{item.label}</span></button>;
+            return <button aria-label={item.label} aria-pressed={operationCode === operation.code} disabled={Boolean(busy)} className={operationCode === operation.code ? "active" : ""} key={operation.code} onClick={() => selectOperation(operation.code)} title={`${item.label} · 预计 ${operation.member_base_points ?? operation.current_price?.base_points ?? 0} 积分起`} type="button"><Icon size={19} /><span>{item.label}</span></button>;
           })}
         </nav>
         <section className="user-canvas-column" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (isGeneration) void uploadReferences(Array.from(event.dataTransfer.files)); else void upload(event.dataTransfer.files[0]); }}>
           <header className="user-canvas-head">
             <span><FileImage size={17} /><strong>{compareSource ? "原图与结果" : "创作预览"}</strong></span>
             <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{(source || resultAsset) && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
-            <div className="user-canvas-actions">{canRefine && <button className="user-secondary compact" disabled={Boolean(busy) || jobRunning} onClick={() => setSelectionAsset(refinementTarget)} type="button"><Brush size={16} />选区修边</button>}{resultAsset && <button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button>}</div>
+            <div className="user-canvas-actions">{canRefine && <button className="user-secondary compact" disabled={Boolean(busy)} onClick={() => setSelectionAsset(refinementTarget)} type="button"><Brush size={16} />选区修边</button>}{resultAsset && <button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button>}</div>
           </header>
           <ComparisonPreview key={`${sourceId}:${resultAsset?.id}:${operationCode}`} compare={compareSource} source={source ? { asset: source, url: sourceUrl } : null} result={resultAsset ? { asset: resultAsset, url: resultUrl } : null}
             backgroundClass={`preview-${previewMode}`} backgroundStyle={previewStyle}
             onError={() => setError("图片预览加载失败，可尝试重新载入预览或下载图片。")}
-            sourceOverlay={needsMask && !resultAsset && source?.width && source?.height ? <MaskCanvas key={`${sourceId}:${maskRevision}`} ref={brushRef} disabled={Boolean(busy) || jobRunning} width={source.width} height={source.height} onChange={() => { setMaskId(""); setQuote(null); }} /> : undefined}
+            sourceOverlay={needsMask && !resultAsset && source?.width && source?.height ? <MaskCanvas key={`${sourceId}:${maskRevision}`} ref={brushRef} disabled={Boolean(busy)} width={source.width} height={source.height} onChange={() => { detachJob(); setMaskId(""); setQuote(null); }} /> : undefined}
             empty={busy === "loading" ? <MiniLoading /> : isGeneration ? (
               <div className="user-canvas-empty generation"><span><Sparkles size={32} /></span><small>YOUR NEXT CREATION</small><strong>把想象，变成看得见的作品</strong><p>在右侧写下你的想法，<br />选择尺寸与质量，即可开始创作。</p><div className="user-prompt-examples">{["极简植物线稿，米白背景，适合装饰画", "复古山脉与落日，丝网印刷风格"].map((prompt) => <button key={prompt} onClick={() => setForm({ ...form, prompt })} type="button">{prompt}<ArrowRight size={14} /></button>)}</div></div>
             ) : (
-              <button className="user-canvas-empty" disabled={Boolean(busy) || jobRunning} onClick={() => uploadRef.current?.click()} type="button"><span><ImagePlus size={32} /></span><strong>放入图片，开始创作</strong><p>拖拽图片到这里，或点击上传</p><small>PNG / JPEG / WebP · 最大 {bootstrap.membership.entitlements.max_upload_mb} MB</small></button>
+              <button className="user-canvas-empty" disabled={Boolean(busy)} onClick={() => uploadRef.current?.click()} type="button"><span><ImagePlus size={32} /></span><strong>放入图片，开始创作</strong><p>拖拽图片到这里，或点击上传</p><small>PNG / JPEG / WebP · 最大 {bootstrap.membership.entitlements.max_upload_mb} MB</small></button>
             )} />
           {batchResults.length > 1 && <section className="studio-result-gallery" aria-label="本次任务全部结果"><header><strong>本次结果 <small>{batchResults.length} 张</small></strong><button type="button" className="user-secondary" disabled={downloadingBatch} onClick={async () => { if (!activeJob) return; setDownloadingBatch(true); try { await downloadJob(activeJob.id); } catch (reason) { setError(messageOf(reason)); } finally { setDownloadingBatch(false); } }}><Download size={14} />{downloadingBatch ? "打包中…" : "下载整组 ZIP"}</button></header><div>{batchResults.map((asset, index) => <button type="button" key={asset.id} aria-label={`查看第 ${index + 1} 张结果`} aria-pressed={resultAsset?.id === asset.id} onClick={() => setResultAsset(asset)}><ImageThumbnail id={asset.id} /><span>{String(index + 1).padStart(2, "0")}</span></button>)}</div></section>}
             {activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status) && (
               <JobProgress job={activeJob} />
             )}
-          {(resultAsset || needsMask) && <div className="user-canvas-foot"><span>{needsMask && !resultAsset ? "紫色涂抹区域将被修改，其他区域保留" : "原图保留 · 结果为独立版本"}</span>{resultAsset && resultAsset.kind !== "vector" && <button disabled={Boolean(busy)} onClick={() => { setSourceId(resultAsset.id); setResultAsset(null); setActiveJob(null); selectOperation("ai.redraw"); }} type="button">继续编辑结果<ArrowRight size={14} /></button>}</div>}
+          {(resultAsset || needsMask) && <div className="user-canvas-foot"><span>{needsMask && !resultAsset ? "紫色涂抹区域将被修改，其他区域保留" : "原图保留 · 结果为独立版本"}</span>{resultAsset && resultAsset.kind !== "vector" && <button disabled={Boolean(busy)} onClick={() => { chooseSource(resultAsset); selectOperation("ai.redraw"); }} type="button">继续编辑结果<ArrowRight size={14} /></button>}</div>}
+          <StudioTaskQueue jobs={trackedJobs} focusedJobId={activeJob?.id || null} concurrency={bootstrap.membership.entitlements.max_concurrent_jobs} onUpdate={trackJob} onSettled={refreshBalance} onOpen={(id) => navigate(`/app/studio?job=${id}`)} nameOf={operationName} />
           {error && !quote && <InlineMessage tone="error">{error}</InlineMessage>}
           {notice && !error && <InlineMessage tone="success">{notice}</InlineMessage>}
           {pollError && <InlineMessage tone="warning">{pollError}</InlineMessage>}
@@ -1170,17 +1191,17 @@ function StudioPage({
           {lineage.length > 0 && (
             <section className="user-version-strip">
               <header><History size={16} /><strong>版本链</strong><span>{lineage.length}</span></header>
-              <div>{lineage.map((asset, index) => <AssetThumb asset={asset} key={asset.id} label={`V${index + 1}`} onClick={() => { if (busy || jobRunning || asset.kind === "vector") return; setSourceId(asset.id); setResultAsset(null); }} />)}</div>
+              <div>{lineage.map((asset, index) => <AssetThumb asset={asset} key={asset.id} label={`V${index + 1}`} onClick={() => { if (busy || asset.kind === "vector") return; chooseSource(asset); }} />)}</div>
             </section>
           )}
         </section>
         <aside className="user-studio-controls">
           <header><span>创作设置</span><h2>{meta.label}</h2><p>{meta.description}</p></header>
-          <fieldset className="user-studio-fields" disabled={Boolean(busy) || jobRunning}>
-          {isGeneration && <section className="studio-references"><header><span>参考图片 <small>可选 · {referenceIds.length}/6</small></span><button type="button" onClick={() => uploadRef.current?.click()} disabled={referenceIds.length >= 6}><Plus size={14} />添加</button></header><div>{referenceIds.map((id, index) => <div key={id}><button type="button" aria-label={`查看参考图 ${index + 1}`} aria-pressed={sourceId === id} onClick={() => { setSourceId(id); setReferenceIds([id, ...referenceIds.filter((value) => value !== id)]); setQuote(null); }}><ImageThumbnail id={id} /><small>{index === 0 ? "主参考" : `参考 ${index + 1}`}</small></button><button className="studio-reference-remove" type="button" aria-label={`移除参考图 ${index + 1}`} onClick={() => changeReferences(referenceIds.filter((value) => value !== id))}><X size={12} /></button></div>)}{!referenceIds.length && <button className="studio-reference-empty" type="button" onClick={() => uploadRef.current?.click()}><ImagePlus size={20} /><span>上传产品或灵感图<small>支持多选，也可拖入画布</small></span></button>}</div><select aria-label="从素材库添加参考图" value="" disabled={referenceIds.length >= 6} onChange={(event) => { if (event.target.value) changeReferences([...referenceIds, event.target.value]); }}><option value="">从素材库添加</option>{selectableAssets.filter((asset) => !referenceIds.includes(asset.id)).map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></section>}
+          <fieldset className="user-studio-fields" disabled={Boolean(busy)}>
+          {isGeneration && <section className="studio-references"><header><span>参考图片 <small>可选 · {referenceIds.length}/6</small></span><button type="button" onClick={() => uploadRef.current?.click()} disabled={referenceIds.length >= 6}><Plus size={14} />添加</button></header><div>{referenceIds.map((id, index) => <div key={id}><button type="button" aria-label={`查看参考图 ${index + 1}`} aria-pressed={sourceId === id} onClick={() => changeReferences([id, ...referenceIds.filter((value) => value !== id)])}><ImageThumbnail id={id} /><small>{index === 0 ? "主参考" : `参考 ${index + 1}`}</small></button><button className="studio-reference-remove" type="button" aria-label={`移除参考图 ${index + 1}`} onClick={() => changeReferences(referenceIds.filter((value) => value !== id))}><X size={12} /></button></div>)}{!referenceIds.length && <button className="studio-reference-empty" type="button" onClick={() => uploadRef.current?.click()}><ImagePlus size={20} /><span>上传产品或灵感图<small>支持多选，也可拖入画布</small></span></button>}</div><button className="user-secondary" aria-label="从素材库添加参考图" disabled={referenceIds.length >= 6} onClick={() => setAssetPicker("reference")} type="button"><Images size={16} />从素材库添加</button></section>}
           {operationCode === "ai.ecommerce" && <div className="studio-commerce-fields"><label className="user-field"><span>电商平台</span><select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}><option value="amazon">Amazon</option><option value="etsy">Etsy</option><option value="shopify">Shopify</option><option value="taobao">淘宝 / 天猫</option><option value="jd">京东</option><option value="douyin">抖音电商</option></select></label><label className="user-field"><span>生成张数</span><select value={form.imageCount} onChange={(event) => setForm({ ...form, imageCount: Number(event.target.value) })}>{Array.from({ length: 8 }, (_, i) => <option value={i + 1} key={i}>{i + 1} 张</option>)}</select></label></div>}
           {meta.source && (
-            <div className="studio-source-picker"><label className="user-field"><span>来源素材</span><select onChange={(event) => { setSourceId(event.target.value); setResultAsset(null); }} value={sourceId}><option value="">从素材库选择</option>{selectableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.original_filename || operationName(asset.operation_code)} · {dateTime(asset.created_at)}</option>)}</select></label><button className="user-secondary" aria-label={source ? "替换 / 上传图片" : "上传图片"} title={source ? "替换 / 上传图片" : "上传图片"} disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}</button></div>
+            <div className="studio-source-picker"><div className="user-field"><span>来源素材</span><button className="studio-source-choice" aria-label="从素材库选择图片" onClick={() => setAssetPicker("source")} type="button">{source ? <><ImageThumbnail id={source.id} /><span><strong>{source.original_filename || operationName(source.operation_code)}</strong><small>{source.width} × {source.height} · 点击更换</small></span></> : <><Images size={20} /><span>从素材库选择图片</span></>}<ChevronDown size={16} /></button></div><button className="user-secondary" aria-label={source ? "替换 / 上传图片" : "上传图片"} title={source ? "替换 / 上传图片" : "上传图片"} disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}</button></div>
           )}
           <input accept="image/png,image/jpeg,image/webp" hidden multiple={isGeneration} onChange={(event) => { if (isGeneration) void uploadReferences(Array.from(event.target.files || [])); else void upload(event.target.files?.[0]); }} ref={uploadRef} type="file" />
           {operationCode === "ai.extract_print" && <>
@@ -1189,7 +1210,9 @@ function StudioPage({
               setForm({ ...form, printOutputMode: mode }); setQuote(null);
               void api.updatePreferences({ studio_layout: { print_output_mode: mode } }).then(({ preferences }) => onBootstrap({ ...bootstrapRef.current, preferences })).catch(() => undefined);
             }} />
-            {sourceId && !restoringJob && <PrintBackgroundControls key={sourceId} sourceId={sourceId} sourceUrl={sourceUrl} color={productColor} onChange={(color) => { setPrintBackground({ sourceId, color }); setQuote(null); }} />}
+            <p className="user-mask-hint">透明模式去除背景；不透明模式保留自动识别的原产品颜色作为平整背景。</p>
+            <PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />
+            <label className="user-field"><span>输出尺寸</span><select aria-label="输出尺寸" value={form.printOutputSize} onChange={(event) => setForm({ ...form, printOutputSize: event.target.value })}><option value="2048x2048">方形 · 2048 × 2048</option><option value="2048x3072">竖版 · 2048 × 3072</option><option value="3072x2048">横版 · 3072 × 2048</option><option value="3072x3072">大方形 · 3072 × 3072</option></select><small>按比例适配画布，完整保留图案；放大尺寸不等于增加原始细节。</small></label>
           </>}
           {(operationCode.startsWith("ai.") || operationCode === "ai.generate") && (
             <label className="user-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={3} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
@@ -1200,21 +1223,28 @@ function StudioPage({
           {operationCode === "color.effect" && <><Segmented label="颜色效果" value={form.colorMode} options={[["grayscale", "灰度"], ["threshold", "黑白"], ["invert", "反色"], ["monochrome", "单色"]]} onChange={(value) => setForm({ ...form, colorMode: value })} />{form.colorMode === "monochrome" && <label className="user-color-field"><input aria-label="单色颜色" onChange={(event) => setForm({ ...form, color: event.target.value })} type="color" value={form.color} /><span><strong>目标颜色</strong><small>{form.color.toUpperCase()}</small></span></label>}</>}
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
           {operationCode === "cutout.smart" && <p className="user-mask-hint">自动抠图后，点击画布上方“选区修边”检查红色删除区域。可补选残留、取消误选、调整容差并实时预览；手动修边不扣积分。单色底原图也可直接进入修边。</p>}
-          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>先确认产品底色。透明模式去除底色后，可通过“选区修边”补选图案内部残留、取消误选并检查细边；修边不扣积分。原产品底色模式输出平整底色，不保留产品外形、纹理和褶皱；进入修边并删除背景后会另存透明 PNG。两种模式均保留原结果。有多个图案时，可在补充要求中指定提取区域。</p></details>}
+          {operationCode === "ai.extract_print" && <details className="studio-tool-help"><summary>印花提取使用建议</summary><p>预览背景只用于检查边缘，不改变生成和导出。透明模式去除底色后，可通过“选区修边”补选图案内部残留、取消误选并检查细边；修边不扣积分。不透明模式输出原产品颜色的平整背景，不保留产品外形、纹理和褶皱。有多个图案时，可在补充要求中指定提取区域。</p></details>}
           {operationCode === "ai.redraw" && <details className="studio-tool-help"><summary>高清重绘与印花提取的区别</summary><p>重绘只提升清晰度，保留主体、背景与构图。需要去除产品、单独还原图案，请使用“印花提取”。</p></details>}
-          {resultAsset?.has_alpha && <details className="studio-tool-help"><summary>预览背景（不影响导出）</summary><PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} /></details>}
+          {resultAsset?.has_alpha && operationCode !== "ai.extract_print" && <details className="studio-tool-help"><summary>预览背景（不影响导出）</summary><PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} /></details>}
           </fieldset>
           <div className="user-studio-submit">
           <div className="user-quote-summary"><span>预计积分</span><strong>{estimatedPoints(selectedOperation, parameters()) ?? "--"}<small>积分</small></strong></div>
-          <button className="user-primary user-submit-operation" disabled={Boolean(busy) || jobRunning || !selectedOperation || maintenance || providerUnavailable} onClick={() => void prepareQuote()} type="button">{busy === "quote" || jobRunning ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}{jobRunning ? "正在处理图片" : busy === "quote" ? "正在计算报价" : "开始创作"}<ArrowRight size={16} /></button>
+          <button className="user-primary user-submit-operation" disabled={Boolean(busy) || !selectedOperation || maintenance || providerUnavailable} onClick={() => void prepareQuote()} type="button">{busy === "quote" ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}{busy === "quote" ? "正在计算报价" : "开始创作"}<ArrowRight size={16} /></button>
           <small className="user-submit-note">{operationCode === "ai.ecommerce" && `共 ${form.imageCount} 张 · `}确认报价后扣费 · 失败自动退还积分</small>
           {(maintenance || providerUnavailable) && <small className="user-maintenance-note">{maintenance ? "服务维护期间暂不接受新任务" : "AI 图片服务尚未配置"}</small>}
           {!selectedOperation && !busy && <small className="user-maintenance-note">没有可用工具，请检查后台的功能定价配置。</small>}
           </div>
         </aside>
       </div>
-      {selectionAsset && <BackgroundSelectionEditor key={selectionAsset.id} asset={selectionAsset} onClose={() => setSelectionAsset(null)} onSaved={(saved) => {
-        setSelectionAsset(null); setActiveJob(null); setBatchResults([]); setResultAsset(saved);
+      {assetPicker && <AssetPickerDialog title={assetPicker === "reference" ? "从素材库添加参考图" : "选择来源素材"} selectedId={assetPicker === "source" ? sourceId : undefined} excludedIds={assetPicker === "reference" ? referenceIds : undefined} onClose={() => setAssetPicker(null)} onSelect={(asset) => {
+        if (assetPicker === "reference") {
+          setAssets((items) => [asset, ...items.filter((item) => item.id !== asset.id)]);
+          changeReferences([...referenceIds, asset.id]);
+        } else chooseSource(asset);
+        setAssetPicker(null);
+      }} />}
+      {selectionAsset && <BackgroundSelectionEditor key={selectionAsset.id} asset={selectionAsset} previewUrl={selectionAsset.id === resultAsset?.id ? resultUrl : sourceUrl} onClose={() => setSelectionAsset(null)} onSaved={(saved) => {
+        setSelectionAsset(null); detachJob(); setBatchResults([]); setResultAsset(saved);
         setAssets((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
         setQuote(null); setError(""); setNotice("修边已保存为新版本，未扣积分。可继续修边或下载透明 PNG。");
       }} />}
@@ -1653,7 +1683,7 @@ function QuoteDialog({
       <section aria-labelledby="quote-title" aria-modal="true" className="user-modal" role="dialog">
         <header><span><small>提交前确认</small><h2 id="quote-title">任务报价</h2></span><button aria-label="关闭报价" disabled={busy} onClick={onCancel} title="关闭" type="button"><X size={19} /></button></header>
         <div className="user-quote-operation"><span className="user-operation-icon"><Sparkles size={19} /></span><span><strong>{operation?.name || operationName(quote.operation_code)}</strong><small>报价在 {dateTime(quote.expires_at)} 前有效</small></span></div>
-        {quote.operation_code === "ai.extract_print" && <dl className="user-quote-lines"><div><dt>输出背景</dt><dd>{parameters?.output_mode === "opaque" ? "原产品底色（不透明）" : "透明背景"}</dd></div><div><dt>产品底色</dt><dd><i className="print-quote-color" style={{ backgroundColor: String(parameters?.background_color || "#000000") }} />{String(parameters?.background_color || "自动识别")}</dd></div></dl>}
+        {quote.operation_code === "ai.extract_print" && <dl className="user-quote-lines"><div><dt>输出背景</dt><dd>{parameters?.output_mode === "opaque" ? "原产品底色（不透明）" : "透明背景"}</dd></div><div><dt>输出尺寸</dt><dd>{String(parameters?.output_size || "2048x2048").replace("x", " × ")}</dd></div></dl>}
         <dl className="user-quote-lines"><div><dt>基础积分</dt><dd>{quote.base_points}</dd></div><div><dt>会员优惠</dt><dd>-{quote.discount_points}</dd></div>{quote.surcharge_points > 0 && <div><dt>参数附加</dt><dd>+{quote.surcharge_points}</dd></div>}<div className="total"><dt>本次需要</dt><dd>{quote.final_points} 积分</dd></div><div><dt>当前余额</dt><dd>{balance} 积分</dd></div></dl>
         {insufficient && <InlineMessage tone="warning">还差 {quote.final_points - balance} 积分，当前无法提交任务。可前往积分流水查看账户变化。</InlineMessage>}
         {error && <InlineMessage tone="error">{error}</InlineMessage>}

@@ -12,7 +12,7 @@ from sqlalchemy import update
 
 from app.api.errors import ApiError
 from app.config import Settings
-from app.domain.print_extraction import print_options
+from app.domain.print_extraction import PRINT_OUTPUT_SIZES, print_options, print_output_size
 from app.image_ops import (
     ImageInputError,
     apply_color_effect,
@@ -21,7 +21,12 @@ from app.image_ops import (
     vectorize_artwork,
 )
 from app.object_storage import ObjectStorage, ObjectStorageError
-from app.print_extraction import extract_prompt, finish_print, product_background
+from app.print_extraction import (
+    extract_prompt,
+    finish_print,
+    product_background,
+    size_print_outputs,
+)
 from app.repositories.models import ImageJob
 from app.services.asset_files import AssetInputError, prepare_asset
 from app.services.assets import AssetService
@@ -310,10 +315,12 @@ class ImageJobExecutor:
                 parameters.get("instruction") or parameters.get("prompt") or ""
             ).strip()
             prompt = AI_EDIT_PROMPTS[operation]
+            output_size = None
             if operation == "ai.extract_print":
                 output_mode, background_color = print_options(parameters)
+                output_size = print_output_size(parameters)
                 if background_color is None:
-                    # Compatibility for jobs created before the color selector.
+                    # Product color is inferred in the task, independent of preview settings.
                     estimated = await asyncio.to_thread(product_background, source)
                     background_color = estimated["color"]
                 prompt = extract_prompt(background_color, instruction)
@@ -330,7 +337,9 @@ class ImageJobExecutor:
                     image_png=source,
                     mask_png=mask,
                     prompt=prompt,
-                    size=self._choice(
+                    size=PRINT_OUTPUT_SIZES[output_size]
+                    if output_size
+                    else self._choice(
                         parameters,
                         "size",
                         "auto",
@@ -347,6 +356,17 @@ class ImageJobExecutor:
                 output, metadata = await asyncio.to_thread(
                     finish_print, upstream.data, mode=output_mode, color=background_color
                 )
+                edit_source = upstream.data
+                if output_size:
+                    output, edit_source = await asyncio.to_thread(
+                        size_print_outputs,
+                        output,
+                        upstream.data,
+                        size=output_size,
+                        mode=output_mode,
+                        color=background_color,
+                    )
+                    metadata["output_size"] = output_size
                 return (
                     output,
                     "png",
@@ -355,7 +375,7 @@ class ImageJobExecutor:
                         **metadata,
                         "revised_prompt": upstream.revised_prompt,
                         "workflow": "product-color-print-extraction",
-                        "_edit_source_data": upstream.data,
+                        "_edit_source_data": edit_source,
                     },
                 )
             return (

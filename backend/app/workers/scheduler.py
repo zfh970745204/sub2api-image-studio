@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, ClassVar
 
 from arq import cron
@@ -66,14 +67,18 @@ async def dispatch_image_jobs(ctx: dict[str, Any]) -> dict[str, int]:
     request_id = "scheduler:image-job-dispatch"
     async with runtime.database.session_factory() as session:
         released = await job_service.release_due_retries(session, request_id=request_id)
-        jobs = await job_service.dispatchable_jobs(session)
+        jobs = await job_service.dispatchable_jobs(
+            session, system_concurrency_limit=ctx.get("settings", settings).worker_max_jobs
+        )
         await session.commit()
     queued = 0
     for job_id, queue_name in jobs:
         result = await ctx["redis"].enqueue_job(
             "execute_image_job",
             str(job_id),
-            _job_id=f"image-job:{job_id}",
+            # A retained/finishing ARQ delivery must not suppress the next claim
+            # after capacity opens or an application retry becomes due.
+            _job_id=f"image-job:{job_id}:{uuid.uuid4().hex}",
             _queue_name=queue_name,
         )
         if result is not None:

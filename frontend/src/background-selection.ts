@@ -15,7 +15,8 @@ export class BackgroundSelection {
   constructor(readonly width: number, readonly height: number, readonly source: Uint8ClampedArray, readonly result: Uint8ClampedArray, hasSelection: boolean) {
     const size = width * height;
     if (size < 1 || size > 16_000_000 || source.length !== size * 4 || result.length !== source.length) throw new Error("修边原图与结果尺寸不一致，无法安全恢复像素");
-    this.alpha = Uint8ClampedArray.from({ length: size }, (_, i) => Math.min(source[i * 4 + 3], result[i * 4 + 3]));
+    this.alpha = new Uint8ClampedArray(size);
+    for (let i = 0; i < size; i++) this.alpha[i] = Math.min(source[i * 4 + 3], result[i * 4 + 3]);
     this.historyLimit = Math.max(2, Math.min(30, Math.floor(48_000_000 / size)));
     if (!hasSelection) this.selectBorder();
     this.initial = this.alpha.slice();
@@ -119,7 +120,8 @@ export class BackgroundSelection {
     this.region(border, color, 8, true, (i) => { this.alpha[i] = 0; });
   }
 
-  render(edge = 0) {
+  render(edge = 0, pixels = new Uint8ClampedArray(this.source.length)) {
+    if (pixels.length !== this.source.length || pixels.buffer === this.source.buffer || pixels.buffer === this.result.buffer) throw new Error("预览缓冲区必须与原图等大且独立");
     let alpha = this.alpha;
     // Erode alpha only; callers can turn this down without losing their selection.
     for (let pass = 0; pass < Math.max(0, Math.min(3, Math.floor(edge))); pass++) {
@@ -134,7 +136,6 @@ export class BackgroundSelection {
       }
       alpha = next;
     }
-    const pixels = new Uint8ClampedArray(this.source.length);
     let removed = 0, visible = 0;
     for (let i = 0; i < alpha.length; i++) {
       const at = i * 4;
