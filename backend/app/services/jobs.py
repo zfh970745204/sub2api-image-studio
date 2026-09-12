@@ -1303,10 +1303,12 @@ class JobService:
                 ids = [source_id]
                 if parsed.options.background == "image":
                     ids.append(parsed.options.background_asset_id)
+                if parsed.options.watermark == "image":
+                    ids.append(parsed.options.watermark_asset_id)
                 for asset_id in ids:
                     asset = await session.get(Asset, asset_id)
                     if asset is None or asset.owner_id != user_id or asset.status != "ready":
-                        raise ApiError(404, "SOURCE_ASSET_NOT_FOUND", "来源或背景素材不存在")
+                        raise ApiError(404, "SOURCE_ASSET_NOT_FOUND", "来源、背景或水印素材不存在")
                     if asset.kind not in {"original", "result"} or asset.mime_type not in {
                         "image/png",
                         "image/jpeg",

@@ -18,6 +18,22 @@ class ToolboxOptions(BaseModel):
     flip_horizontal: StrictBool = False
     flip_vertical: StrictBool = False
     padding: int = Field(default=0, ge=0, le=2000, strict=True)
+    brightness: int = Field(default=0, ge=-100, le=100, strict=True)
+    contrast: int = Field(default=0, ge=-100, le=100, strict=True)
+    saturation: int = Field(default=0, ge=-100, le=100, strict=True)
+    blur: int = Field(default=0, ge=0, le=20, strict=True)
+    sharpen: int = Field(default=0, ge=0, le=5, strict=True)
+    grayscale: StrictBool = False
+    invert: StrictBool = False
+    watermark: Literal["none", "text", "image"] = "none"
+    watermark_text: str = Field(default="", max_length=80)
+    watermark_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    watermark_asset_id: uuid.UUID | None = None
+    watermark_position: Literal[
+        "top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right"
+    ] = "bottom-right"
+    watermark_opacity: int = Field(default=35, ge=1, le=100, strict=True)
+    watermark_scale: int = Field(default=25, ge=5, le=80, strict=True)
     background: Literal["transparent", "color", "image"] = "transparent"
     color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
     background_asset_id: uuid.UUID | None = None
@@ -32,6 +48,10 @@ class ToolboxOptions(BaseModel):
             raise ValueError("指定文件大小请选择 JPG 或 WebP；PNG 使用无损压缩")
         if self.background == "image" and self.background_asset_id is None:
             raise ValueError("请选择背景图片")
+        if self.watermark == "text" and not self.watermark_text.strip():
+            raise ValueError("请输入水印文字")
+        if self.watermark == "image" and self.watermark_asset_id is None:
+            raise ValueError("请选择水印图片")
         return self
 
 

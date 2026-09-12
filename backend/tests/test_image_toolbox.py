@@ -84,6 +84,68 @@ def test_jpg_flattens_alpha_and_webp_keeps_it():
     assert webp.extension == "webp" and webp.has_alpha
 
 
+def test_adjustments_change_rgb_without_touching_alpha():
+    source = Image.new("RGBA", (3, 3), (40, 80, 120, 77))
+    source.putpixel((1, 1), (200, 100, 20, 200))
+    result, _ = process_image(
+        png(source),
+        ToolboxOptions(brightness=50, saturation=-100, grayscale=True, invert=True),
+    )
+    with Image.open(BytesIO(result.data)) as image:
+        assert image.getpixel((0, 0))[3] == 77
+        assert image.getpixel((1, 1))[3] == 200
+        assert image.getpixel((0, 0))[:3] == (146, 146, 146)
+        assert image.getpixel((1, 1))[:3] == (87, 87, 87)
+
+
+def test_blur_and_sharpen_are_available_for_raster_detail():
+    source = Image.new("RGBA", (9, 9), "black")
+    source.putpixel((4, 4), (255, 255, 255, 255))
+    blurred, _ = process_image(png(source), ToolboxOptions(blur=4))
+    sharpened, _ = process_image(png(source), ToolboxOptions(sharpen=5))
+    with Image.open(BytesIO(blurred.data)) as image:
+        assert image.getpixel((3, 4))[0] > 0
+    with Image.open(BytesIO(sharpened.data)) as image:
+        assert image.getpixel((4, 4))[0] == 255
+        assert image.getpixel((3, 4))[0] == 0
+
+
+def test_text_and_image_watermarks_honor_position_scale_and_opacity():
+    source = png(Image.new("RGBA", (100, 100), (0, 0, 0, 0)))
+    text, _ = process_image(
+        source,
+        ToolboxOptions(
+            watermark="text",
+            watermark_text="MARK",
+            watermark_color="#ff0000",
+            watermark_position="top-left",
+            watermark_opacity=100,
+            watermark_scale=25,
+        ),
+    )
+    with Image.open(BytesIO(text.data)) as image:
+        assert any(image.getpixel((x, y))[0] > 200 for y in range(35) for x in range(55))
+        assert not any(image.getpixel((x, y))[0] > 200 for y in range(65, 100) for x in range(55, 100))
+
+    watermark = png(Image.new("RGBA", (80, 40), (0, 255, 0, 255)))
+    image_result, _ = process_image(
+        source,
+        ToolboxOptions(
+            watermark="image",
+            watermark_asset_id=uuid.uuid4(),
+            watermark_position="center",
+            watermark_opacity=50,
+            watermark_scale=25,
+        ),
+        watermark=watermark,
+    )
+    with Image.open(BytesIO(image_result.data)) as image:
+        assert image.getpixel((50, 50)) == (0, 255, 0, 128)
+        bbox = image.getchannel("A").getbbox()
+        assert bbox is not None and bbox[2] - bbox[0] <= 25 and bbox[3] - bbox[1] <= 13
+        assert 35 <= bbox[0] <= 40 and 43 <= bbox[1] <= 46
+
+
 def test_image_background_and_padding_are_exported():
     source = Image.new("RGBA", (40, 20))
     source.paste("red", (10, 5, 30, 15))
@@ -263,7 +325,7 @@ async def test_batch_submission_rolls_back_all_items_if_later_source_disappears(
 
 
 @pytest.mark.asyncio
-async def test_quote_rejects_foreign_background_duplicates_and_account_size_limit(asset_context):
+async def test_quote_rejects_foreign_background_or_watermark_duplicates_and_account_size_limit(asset_context):
     async with asset_context.database.session_factory() as session:
         plan = await session.scalar(select(MembershipPlan).where(MembershipPlan.code == "free"))
         plan.max_image_megapixels = 1
@@ -276,14 +338,15 @@ async def test_quote_rejects_foreign_background_duplicates_and_account_size_limi
     async with client_for(asset_context, "limits-owner") as client:
         await login(client, owner.email)
         source = (await upload(client, png(Image.new("RGB", (20, 20), "red")))).json()["asset"]
-        response = await client.post(
-            "/api/v1/toolbox/quote",
-            json={
-                "asset_ids": [source["id"]],
-                "options": {"background": "image", "background_asset_id": foreign["id"]},
-            },
-        )
-        assert response.status_code == 404
+        for options in [
+            {"background": "image", "background_asset_id": foreign["id"]},
+            {"watermark": "image", "watermark_asset_id": foreign["id"]},
+        ]:
+            response = await client.post(
+                "/api/v1/toolbox/quote",
+                json={"asset_ids": [source["id"]], "options": options},
+            )
+            assert response.status_code == 404
         response = await client.post(
             "/api/v1/toolbox/quote",
             json={

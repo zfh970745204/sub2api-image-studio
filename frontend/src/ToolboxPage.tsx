@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowRight, Check, Download, FileImage, Images, Layers, LoaderCircle, Maximize, Palette, RefreshCw, RotateCw, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowRight, Check, Download, Droplets, FileImage, Images, Layers, LoaderCircle, Maximize, Palette, RefreshCw, RotateCw, SlidersHorizontal, Sparkles, Type, Upload, X } from "lucide-react";
 import { api, ApiError, type Asset, type BootstrapData, type ImageJob } from "./user-api";
 import { AssetPickerDialog } from "./AssetPickerDialog";
 import { ImageThumbnail } from "./ImageThumbnail";
 import { ToolboxPreview } from "./ToolboxPreview";
-import { defaultToolboxOptions, downloadBundle, processingSteps, toolboxApi, toolboxDimensions, type ToolboxOptions, type ToolboxQuote, type ToolboxParameters } from "./toolbox-api";
+import { defaultToolboxOptions, downloadBundle, normalizeToolboxOptions, processingSteps, toolboxApi, toolboxDimensions, type ToolboxOptions, type ToolboxQuote, type ToolboxParameters } from "./toolbox-api";
 import { usePageVisible } from "./usePageVisible";
 import "./toolbox.css";
 
@@ -15,6 +15,8 @@ const tools = [
   { id: "resize", label: "尺寸与画布", detail: "缩放、裁边与留白", icon: Maximize },
   { id: "rotate", label: "旋转翻转", detail: "调整方向与镜像", icon: RotateCw },
   { id: "background", label: "背景合成", detail: "透明、纯色或图片", icon: Palette },
+  { id: "adjustments", label: "调色增强", detail: "颜色、清晰度与效果", icon: Sparkles },
+  { id: "watermark", label: "添加水印", detail: "文字或图片水印", icon: Type },
   { id: "batch", label: "批量处理", detail: "组合步骤，整组导出", icon: Layers },
 ] as const;
 const pending = (job: ImageJob) => ["queued", "running", "retry_wait"].includes(job.status);
@@ -37,8 +39,8 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
   const [active, setActive] = useState<string>("compress");
   const [options, setOptions] = useState<ToolboxOptions>({ ...defaultToolboxOptions, format: "webp" });
   const [assets, setAssets] = useState<Asset[]>([]), [focused, setFocused] = useState("");
-  const [picker, setPicker] = useState<"source" | "background" | null>(null);
-  const [backgroundAsset, setBackgroundAsset] = useState<Asset | null>(null);
+  const [picker, setPicker] = useState<"source" | "background" | "watermark" | null>(null);
+  const [backgroundAsset, setBackgroundAsset] = useState<Asset | null>(null), [watermarkAsset, setWatermarkAsset] = useState<Asset | null>(null);
   const [batchName, setBatchName] = useState("图片处理"), [prefix, setPrefix] = useState("");
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [jobs, setJobs] = useState<ImageJob[]>([]), [jobError, setJobError] = useState("");
@@ -46,7 +48,7 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
   const [quote, setQuote] = useState<ToolboxQuote | null>(null), [submitUncertain, setSubmitUncertain] = useState(false);
   const [result, setResult] = useState<{ asset: Asset; url: string } | null>(null);
   const [available, setAvailable] = useState(false);
-  const uploadRef = useRef<HTMLInputElement>(null), backgroundRef = useRef<HTMLInputElement>(null), guard = useRef(false);
+  const uploadRef = useRef<HTMLInputElement>(null), backgroundRef = useRef<HTMLInputElement>(null), watermarkRef = useRef<HTMLInputElement>(null), guard = useRef(false);
   const visible = usePageVisible(), refreshSequence = useRef(0);
   const storageKey = `toolbox-pending:${bootstrap.user.id}`;
   const source = assets.find(asset => asset.id === focused) || assets[0];
@@ -83,8 +85,9 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
     if (jobId) void api.job(jobId).then(async ({ job }) => {
       if (!alive || job.operation_code !== "image.toolbox") return;
       const settings = job.parameters as unknown as ToolboxParameters;
-      setOptions(settings.options); setBatchName(settings.batch_name); setBatchFilter(settings.batch_id); setActive("batch");
+      setOptions(normalizeToolboxOptions(settings.options)); setBatchName(settings.batch_name); setBatchFilter(settings.batch_id); setActive("batch");
       if (settings.options.background_asset_id) void api.asset(settings.options.background_asset_id).then(({ asset }) => { if (alive) setBackgroundAsset(asset); }).catch(reason => { if (alive) setError(errorText(reason)); });
+      if (settings.options.watermark_asset_id) void api.asset(settings.options.watermark_asset_id).then(({ asset }) => { if (alive) setWatermarkAsset(asset); }).catch(reason => { if (alive) setError(errorText(reason)); });
       if (job.source_asset_id) { const { asset } = await api.asset(job.source_asset_id); if (alive) { setAssets([asset]); setFocused(asset.id); } }
     }).catch(reason => { if (alive) setError(errorText(reason)); });
     return () => { alive = false; ++refreshSequence.current; };
@@ -117,10 +120,10 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
     }
     addAssets([asset]); setFocused(asset.id);
   }
-  async function upload(files: File[], background = false) {
+  async function upload(files: File[], target: "source" | "background" | "watermark" = "source") {
     if (guard.current || !files.length) return;
-    const list = files.slice(0, background ? 1 : 50 - assets.length);
-    if (!list.length) { setError("每批最多 50 张图片"); return; }
+    const list = files.slice(0, target === "source" ? 50 - assets.length : 1);
+    if (!list.length) { setError(target === "source" ? "每批最多 50 张图片" : "一次只能添加一张图片"); return; }
     guard.current = true; setBusy("上传中"); setError(""); const errors: string[] = [], added: Asset[] = [];
     try {
       for (let i = 0; i < list.length; i++) {
@@ -132,10 +135,11 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
           added.push(asset);
         } catch (reason) { errors.push(`${list[i].name}：${errorText(reason)}`); }
       }
-      if (background && added[0]) { setBackgroundAsset(added[0]); change({ background: "image", background_asset_id: added[0].id }); }
+      if (target === "background" && added[0]) { setBackgroundAsset(added[0]); change({ background: "image", background_asset_id: added[0].id }); }
+      else if (target === "watermark" && added[0]) { setWatermarkAsset(added[0]); change({ watermark: "image", watermark_asset_id: added[0].id }); }
       else addAssets(added);
       if (errors.length) setError(errors.join("；"));
-      if (files.length > list.length) setNotice(`本次只添加前 ${list.length} 张，每批最多 50 张。`);
+      if (target === "source" && files.length > list.length) setNotice(`本次只添加前 ${list.length} 张，每批最多 50 张。`);
     } finally { guard.current = false; setBusy(""); }
   }
   async function prepare(retryJobs?: ImageJob[]) {
@@ -190,6 +194,7 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
   const dimensions = source && !options.trim ? toolboxDimensions(source.width || 1, source.height || 1, options) : null;
   const invalidSize = dimensions && (dimensions[0] * dimensions[1] > maxMp * 1_000_000 || Math.max(...dimensions) > 12000);
   const number = (key: "width" | "height" | "percent" | "padding" | "quality" | "target_kb", label: string, min: number, max: number) => <label className="toolbox-field">{label}<input type="number" min={min} max={max} value={options[key]} onChange={event => { if (Number.isFinite(event.target.valueAsNumber)) change({ [key]: Math.round(event.target.valueAsNumber) }); }} /></label>;
+  const range = (key: "brightness" | "contrast" | "saturation" | "blur" | "sharpen", label: string, min: number, max: number, unit = "") => <label className="toolbox-field toolbox-range"><span>{label}<strong>{options[key]}{unit}</strong></span><input aria-label={label} type="range" min={min} max={max} value={options[key]} onChange={event => change({ [key]: Number(event.target.value) })} /></label>;
   if (!canCreate) return <p role="alert">当前账号没有图片工具箱使用权限。</p>;
 
   return <div className="toolbox-page">
@@ -200,22 +205,25 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
       <section className="toolbox-workspace" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (canUpload) void upload(Array.from(event.dataTransfer.files)); }}>
         <header><strong>处理图片 <small>{assets.length} / 50</small></strong><div>{assets.length > 0 && <button className="user-secondary" type="button" disabled={Boolean(busy)} onClick={() => { setAssets([]); setFocused(""); setResult(null); }}>清空所选</button>}<button className="user-secondary" type="button" disabled={Boolean(busy) || assets.length >= 50} onClick={() => setPicker("source")}><Images size={15} />素材库</button><button className="user-secondary" type="button" disabled={!canUpload || Boolean(busy) || assets.length >= 50} onClick={() => uploadRef.current?.click()}><Upload size={15} />上传图片</button></div></header>
         <input ref={uploadRef} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { void upload(Array.from(event.target.files || [])); event.currentTarget.value = ""; }} />
-        <input ref={backgroundRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => { void upload(Array.from(event.target.files || []), true); event.currentTarget.value = ""; }} />
+        <input ref={backgroundRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => { void upload(Array.from(event.target.files || []), "background"); event.currentTarget.value = ""; }} />
+        <input ref={watermarkRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => { void upload(Array.from(event.target.files || []), "watermark"); event.currentTarget.value = ""; }} />
         {assets.length > 0 && <div className="toolbox-source-list" aria-label="本批来源图片">{assets.map(asset => <div key={asset.id}><button type="button" aria-pressed={source?.id === asset.id && !result} onClick={() => { setFocused(asset.id); setResult(null); }}><ImageThumbnail id={asset.id} /><span title={asset.original_filename || asset.id}>{asset.original_filename || "图片"}</span></button><button aria-label={`移除 ${asset.original_filename || asset.id}`} type="button" disabled={Boolean(busy)} onClick={() => { setAssets(current => current.filter(item => item.id !== asset.id)); setResult(null); }}><X size={12} /></button></div>)}</div>}
         {result ? <div className="toolbox-result-preview"><header><strong>{result.asset.original_filename}</strong><span>{result.asset.width} × {result.asset.height} · {size(result.asset.size_bytes)}</span></header><img src={result.url} alt="工具箱处理结果" /><footer><button type="button" className="user-secondary" onClick={() => continueResult(result.asset)}>继续处理此结果</button><button type="button" className="user-secondary" onClick={() => go(`/app/studio?source=${result.asset.id}`)}>在图片编辑器打开</button></footer></div>
           : source ? <ToolboxPreview key={source.id} asset={source} options={options} /> : <div className="toolbox-empty"><span><Images size={36} /></span><h2>添加图片，开始处理</h2><p>拖入图片，或从素材库跨页多选。<br />同一套设置应用于全部图片。</p><small>PNG / JPG / WebP · 每批最多 50 张 · 最高 {maxMp} 百万像素</small></div>}
         <div className="toolbox-flow"><span>本次处理流程</span><strong>{processingSteps(options)}</strong></div>
       </section>
-      <aside className="toolbox-settings"><header><h2>{tools.find(tool => tool.id === active)?.label}</h2><button type="button" title="重置全部参数" aria-label="重置全部参数" onClick={() => { setOptions({ ...defaultToolboxOptions }); setResult(null); }}><RefreshCw size={16} /></button></header>
+      <aside className="toolbox-settings"><header><h2>{tools.find(tool => tool.id === active)?.label || "图片设置"}</h2><button type="button" title="重置全部参数" aria-label="重置全部参数" onClick={() => { setOptions({ ...defaultToolboxOptions }); setBackgroundAsset(null); setWatermarkAsset(null); setResult(null); }}><RefreshCw size={16} /></button></header>
         <fieldset disabled={Boolean(busy) || Boolean(quote)}>
           {active === "resize" && <section className="toolbox-setting-section"><label className="toolbox-field">缩放方式<select value={options.resize} onChange={event => change({ resize: event.target.value as ToolboxOptions["resize"] })}><option value="original">保持原尺寸</option><option value="fit">等比适应（完整保留）</option><option value="fill">铺满尺寸（居中裁切）</option><option value="stretch">拉伸到指定尺寸</option><option value="percent">按百分比缩放</option></select></label>{options.resize === "percent" ? number("percent", "缩放比例 %", 1, 800) : options.resize !== "original" && <><label className="toolbox-field">尺寸预设<select aria-label="尺寸预设" defaultValue="" onChange={event => { if (event.target.value) { const [width, height] = event.target.value.split("x").map(Number); change({ width, height }); } }}><option value="">自定义尺寸</option><option value="2000x2000">商品方图 · 2000 × 2000</option><option value="1080x1440">竖版配图 · 1080 × 1440</option><option value="1920x1080">横版封面 · 1920 × 1080</option><option value="1080x1920">竖屏封面 · 1080 × 1920</option></select></label><div className="toolbox-pair">{number("width", "宽度 px", 1, 12000)}{number("height", "高度 px", 1, 12000)}</div></>}
           <label className="toolbox-check"><input type="checkbox" checked={options.trim} onChange={event => change({ trim: event.target.checked })} />先自动去除透明边缘</label>{number("padding", "四周留白 px", 0, 2000)}</section>}
           {active === "rotate" && <section className="toolbox-setting-section"><label className="toolbox-field">顺时针旋转<select value={options.rotation} onChange={event => change({ rotation: Number(event.target.value) as ToolboxOptions["rotation"] })}>{[0, 90, 180, 270].map(value => <option key={value} value={value}>{value}°</option>)}</select></label><div className="toolbox-toggle-row"><button type="button" aria-pressed={options.flip_horizontal} onClick={() => change({ flip_horizontal: !options.flip_horizontal })}>水平翻转</button><button type="button" aria-pressed={options.flip_vertical} onClick={() => change({ flip_vertical: !options.flip_vertical })}>垂直翻转</button></div><p>翻转在旋转之后进行。</p></section>}
           {active === "background" && <section className="toolbox-setting-section"><label className="toolbox-field">背景类型<select value={options.background} onChange={event => change({ background: event.target.value as ToolboxOptions["background"] })}><option value="transparent">保持透明</option><option value="color">纯色背景</option><option value="image">图片背景</option></select></label>{options.background === "color" && <label className="toolbox-color">背景颜色<input aria-label="背景颜色" type="color" value={options.color} onChange={event => change({ color: event.target.value })} /><span>{options.color.toUpperCase()}</span></label>}{options.background === "image" && <div className="toolbox-background-picker">{backgroundAsset && <ImageThumbnail id={backgroundAsset.id} alt="已选背景图" />}<button className="user-secondary" type="button" onClick={() => setPicker("background")}>{options.background_asset_id ? "更换背景图" : "从素材库选择背景图"}</button><button className="user-secondary" type="button" disabled={!canUpload} onClick={() => backgroundRef.current?.click()}>上传背景图</button></div>}{number("padding", "四周留白 px", 0, 2000)}<p>背景会合成到导出文件。主体需有透明区域才能显示新背景，可先到图片编辑器抠图。</p></section>}
+          {active === "adjustments" && <section className="toolbox-setting-section"><h3>基础调整</h3>{range("brightness", "亮度", -100, 100, "%")}{range("contrast", "对比度", -100, 100, "%")}{range("saturation", "饱和度", -100, 100, "%")}<h3>细节与色彩</h3>{range("blur", "模糊", 0, 20, " px")}{range("sharpen", "锐化", 0, 5)}<div className="toolbox-toggle-row"><button type="button" aria-pressed={options.grayscale} onClick={() => change({ grayscale: !options.grayscale })}><Droplets size={14} />灰度</button><button type="button" aria-pressed={options.invert} onClick={() => change({ invert: !options.invert })}>反色</button></div></section>}
+          {active === "watermark" && <section className="toolbox-setting-section"><h3>水印内容</h3><div className="toolbox-toggle-row toolbox-toggle-row-wide"><button type="button" aria-pressed={options.watermark === "none"} onClick={() => change({ watermark: "none" })}>关闭</button><button type="button" aria-pressed={options.watermark === "text"} onClick={() => change({ watermark: "text" })}><Type size={14} />文字</button><button type="button" aria-pressed={options.watermark === "image"} onClick={() => change({ watermark: "image" })}><Images size={14} />图片</button></div>{options.watermark === "text" && <><label className="toolbox-field">水印文字<input maxLength={80} value={options.watermark_text} placeholder="输入水印内容" onChange={event => change({ watermark_text: event.target.value })} /></label><label className="toolbox-color">文字颜色<input aria-label="水印颜色" type="color" value={options.watermark_color} onChange={event => change({ watermark_color: event.target.value })} /><span>{options.watermark_color.toUpperCase()}</span></label></>}{options.watermark === "image" && <div className="toolbox-background-picker">{watermarkAsset && <ImageThumbnail id={watermarkAsset.id} alt="已选水印图" />}<button className="user-secondary" type="button" onClick={() => setPicker("watermark")}>{options.watermark_asset_id ? "更换水印图" : "从素材库选择水印图"}</button><button className="user-secondary" type="button" disabled={!canUpload} onClick={() => watermarkRef.current?.click()}>上传水印图</button></div>}<label className="toolbox-field">水印位置<select value={options.watermark_position} onChange={event => change({ watermark_position: event.target.value as ToolboxOptions["watermark_position"] })}><option value="top-left">左上</option><option value="top">顶部居中</option><option value="top-right">右上</option><option value="left">左侧居中</option><option value="center">正中</option><option value="right">右侧居中</option><option value="bottom-left">左下</option><option value="bottom">底部居中</option><option value="bottom-right">右下</option></select></label><label className="toolbox-field toolbox-range"><span>透明度<strong>{options.watermark_opacity}%</strong></span><input aria-label="水印透明度" type="range" min={1} max={100} value={options.watermark_opacity} onChange={event => change({ watermark_opacity: Number(event.target.value) })} /></label><label className="toolbox-field toolbox-range"><span>大小<strong>{options.watermark_scale}%</strong></span><input aria-label="水印大小" type="range" min={5} max={80} value={options.watermark_scale} onChange={event => change({ watermark_scale: Number(event.target.value) })} /></label></section>}
           {active === "batch" && <section className="toolbox-setting-section"><label className="toolbox-field">批次名称<input maxLength={80} value={batchName} onChange={event => setBatchName(event.target.value)} /></label><label className="toolbox-field">统一文件名前缀<input maxLength={80} value={prefix} placeholder="留空使用原文件名" onChange={event => setPrefix(event.target.value)} /></label><p>切换上方工具组合步骤，设置会保留。每张图独立排队，失败后可以单独重试。</p></section>}
           <details className="toolbox-export-panel" key={active} open={["compress", "format", "batch"].includes(active)}><summary>输出设置<span>{options.format.toUpperCase()} · {options.format === "png" ? "无损" : options.compression === "target" ? `${options.target_kb} KB` : `质量 ${options.quality}`}</span></summary><section className="toolbox-setting-section toolbox-export"><label className="toolbox-field">输出格式<select value={options.format} onChange={event => change({ format: event.target.value as ToolboxOptions["format"], ...(event.target.value === "png" ? { compression: "quality" } : {}) })}><option value="png">PNG · 支持透明</option><option value="jpg">JPG · 不透明</option><option value="webp">WebP · 支持透明</option></select></label>{options.format === "png" ? <p>PNG 使用无损压缩，保持透明度和像素颜色。</p> : <><label className="toolbox-field">压缩方式<select value={options.compression} onChange={event => change({ compression: event.target.value as ToolboxOptions["compression"] })}><option value="quality">按图片质量</option><option value="target">按目标文件大小</option></select></label>{options.compression === "target" ? number("target_kb", "目标大小 KB", 1, 20480) : <label className="toolbox-field toolbox-quality"><span>图片质量</span><strong>{options.quality}</strong><input aria-label="图片质量" type="range" min={1} max={100} value={options.quality} onChange={event => change({ quality: Number(event.target.value) })} /></label>}{options.compression === "target" && <p>通过调整编码质量尽量达到目标，保留图片尺寸；无法达到时会明确提示。</p>}</>}{options.format === "jpg" && options.background === "transparent" && <label className="toolbox-color">透明区域填充<input aria-label="JPG 底色" type="color" value={options.color} onChange={event => change({ color: event.target.value })} /><span>{options.color.toUpperCase()}</span></label>}</section></details>
         </fieldset>
-        <footer>{dimensions && <span className={invalidSize ? "toolbox-error" : ""}>预计尺寸 {dimensions[0]} × {dimensions[1]} px{invalidSize && " · 超过像素限制"}</span>}<button className="user-primary" type="button" disabled={!assets.length || Boolean(busy) || Boolean(quote) || !available || Boolean(invalidSize) || (options.background === "image" && !options.background_asset_id)} onClick={() => void prepare()}>{busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{busy || `处理 ${assets.length || "所选"} 张图片`}</button><small>{available ? "确认报价后提交 · 原图保留 · 后台排队处理" : "基础图片处理暂未启用，请联系管理员"}</small></footer>
+        <footer>{dimensions && <span className={invalidSize ? "toolbox-error" : ""}>预计尺寸 {dimensions[0]} × {dimensions[1]} px{invalidSize && " · 超过像素限制"}</span>}<button className="user-primary" type="button" disabled={!assets.length || Boolean(busy) || Boolean(quote) || !available || Boolean(invalidSize) || (options.background === "image" && !options.background_asset_id) || (options.watermark === "image" && !options.watermark_asset_id) || (options.watermark === "text" && !options.watermark_text.trim())} onClick={() => void prepare()}>{busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{busy || `处理 ${assets.length || "所选"} 张图片`}</button><small>{available ? "确认报价后提交 · 原图保留 · 后台排队处理" : "基础图片处理暂未启用，请联系管理员"}</small></footer>
       </aside>
     </div>
     <section className="toolbox-history"><header><div><h2>{batchFilter ? "批次任务" : "近期任务"}</h2><span>{activeCount ? `${activeCount} 张排队或处理中` : `${successful.length} 张已完成`} · 刷新或离开页面后任务仍继续</span></div><div>{batchFilter && <button type="button" className="user-secondary" onClick={() => setBatchFilter("")}>全部近期任务</button>}<button type="button" className="user-secondary" onClick={() => void refreshJobs()}><RefreshCw size={14} />刷新</button><button type="button" className="user-secondary" disabled={!successful.length || Boolean(busy)} onClick={() => void download(successful.map(job => job.output_asset_id!))}><Download size={14} />打包已完成 ({successful.length})</button></div></header>
@@ -225,6 +233,7 @@ export function ToolboxPage({ bootstrap, onBootstrap }: { bootstrap: BootstrapDa
     </section>
     {picker === "source" && <AssetPickerDialog title="批量选择图片" excludedIds={assets.map(asset => asset.id)} maxSelection={50 - assets.length} onSelectMany={addAssets} onClose={() => setPicker(null)} />}
     {picker === "background" && <AssetPickerDialog title="选择背景图片" onSelect={asset => { setBackgroundAsset(asset); change({ background_asset_id: asset.id, background: "image" }); setPicker(null); }} onClose={() => setPicker(null)} />}
+    {picker === "watermark" && <AssetPickerDialog title="选择水印图片" onSelect={asset => { setWatermarkAsset(asset); change({ watermark_asset_id: asset.id, watermark: "image" }); setPicker(null); }} onClose={() => setPicker(null)} />}
     {quote && <ToolboxConfirmation quote={quote} busy={busy === "提交中"} error={error} uncertain={submitUncertain} onSubmit={() => void submit()} onCancel={() => { setQuote(null); setError(""); if (!submitUncertain) clearDraft(storageKey); }} />}
   </div>;
 }

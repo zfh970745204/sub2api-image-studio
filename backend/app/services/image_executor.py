@@ -286,11 +286,17 @@ class ImageJobExecutor:
                 background = await self._source_data(
                     replace(claim, source_asset_id=parsed.options.background_asset_id)
                 )
+            watermark = None
+            if parsed.options.watermark == "image":
+                watermark = await self._source_data(
+                    replace(claim, source_asset_id=parsed.options.watermark_asset_id)
+                )
             prepared, metadata = await asyncio.to_thread(
                 process_image,
                 source,
                 parsed.options,
                 background,
+                watermark,
                 max_megapixels=claim.max_image_megapixels,
             )
             return (

@@ -101,6 +101,39 @@ describe("toolbox batch workflow", () => {
     expect(sessionStorage.getItem("toolbox-pending:toolbox-user")).toBeNull();
   });
 
+  it("submits adjustment and text watermark settings as one composed toolbox request", async () => {
+    show(); await selectImages();
+    fireEvent.click(screen.getByRole("button", { name: /调色增强/ }));
+    fireEvent.change(screen.getByLabelText("亮度"), { target: { value: "35" } });
+    fireEvent.change(screen.getByLabelText("模糊"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "灰度" }));
+    fireEvent.click(screen.getByRole("button", { name: /添加水印/ }));
+    fireEvent.click(screen.getByRole("button", { name: "文字" }));
+    fireEvent.change(screen.getByLabelText("水印文字"), { target: { value: "SAMPLE" } });
+    fireEvent.change(screen.getByLabelText("水印位置"), { target: { value: "top-left" } });
+    fireEvent.change(screen.getByLabelText("水印透明度"), { target: { value: "70" } });
+    fireEvent.click(screen.getByRole("button", { name: "处理 2 张图片" }));
+    await screen.findByRole("dialog", { name: "确认批量处理" });
+    const quoteCall = fetcher.mock.calls.filter(([url]) => url === "/api/v1/toolbox/quote").at(-1)!;
+    expect(JSON.parse(String(quoteCall[1]?.body)).options).toMatchObject({
+      brightness: 35, blur: 3, grayscale: true, watermark: "text", watermark_text: "SAMPLE",
+      watermark_position: "top-left", watermark_opacity: 70,
+    });
+  });
+
+  it("selects an image watermark from the paginated asset picker", async () => {
+    show(); await selectImages();
+    fireEvent.click(screen.getByRole("button", { name: /添加水印/ }));
+    fireEvent.click(screen.getByRole("button", { name: "图片" }));
+    fireEvent.click(screen.getByRole("button", { name: "从素材库选择水印图" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择 first.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+    fireEvent.click(screen.getByRole("button", { name: "处理 2 张图片" }));
+    await screen.findByRole("dialog", { name: "确认批量处理" });
+    const quoteCall = fetcher.mock.calls.filter(([url]) => url === "/api/v1/toolbox/quote").at(-1)!;
+    expect(JSON.parse(String(quoteCall[1]?.body)).options).toMatchObject({ watermark: "image", watermark_asset_id: "first" });
+  });
+
   it("keeps every file in a full batch downloadable after retries add another history page", async () => {
     window.history.replaceState({}, "", "/app/toolbox?batch=batch-1");
     const completed = Array.from({ length: 50 }, (_, index) => ({
