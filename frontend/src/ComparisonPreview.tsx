@@ -6,9 +6,9 @@ type Preview = { asset: Asset; url: string | null };
 type Position = { x: number; y: number };
 
 /** Coordinates are relative to the contained image, never to its letterboxed viewport. */
-export function ComparisonPreview({ source, result, compare, empty, sourceOverlay, backgroundClass, backgroundStyle, onError }: {
+export function ComparisonPreview({ source, result, compare, empty, sourceOverlay, backgroundClass, backgroundStyle, backgroundControls, onError }: {
   source: Preview | null; result: Preview | null; compare: boolean; empty: ReactNode;
-  sourceOverlay?: ReactNode; backgroundClass: string; backgroundStyle?: CSSProperties;
+  sourceOverlay?: ReactNode; backgroundClass: string; backgroundStyle?: CSSProperties; backgroundControls?: ReactNode;
   onError: () => void;
 }) {
   const [position, setPosition] = useState<Position | null>(null);
@@ -56,8 +56,9 @@ export function ComparisonPreview({ source, result, compare, empty, sourceOverla
     <div className={`studio-comparison${compare ? " is-dual" : ""}`} onPointerLeave={() => setPosition(null)}>
       {compare && pane(source, true)}{pane(result, false)}
     </div>
-    <div className="studio-inspection-bar"><span><ScanSearch size={15} />{sourceOverlay ? "在原图上涂抹需要修改的区域" : "悬停同步放大 · 触屏按住查看 · 按相对位置对比"}</span>
+    <div className={`studio-inspection-bar${backgroundControls ? " has-background-controls" : ""}`}><span title={sourceOverlay ? "在原图上涂抹需要修改的区域" : "悬停同步放大 · 触屏按住查看 · 按相对位置对比"}><ScanSearch size={15} /><span>{sourceOverlay ? "在原图上涂抹需要修改的区域" : backgroundControls ? "悬停查看细节" : "悬停同步放大 · 触屏按住查看 · 按相对位置对比"}</span></span>
       {!sourceOverlay && <label>细节倍率<select aria-label="细节倍率" value={zoom} onChange={(event) => setZoom(Number(event.target.value))}><option value={2}>2×</option><option value={3}>3×</option><option value={4}>4×</option></select></label>}
+      {backgroundControls}
     </div>
   </div>;
 }
