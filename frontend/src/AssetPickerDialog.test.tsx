@@ -24,6 +24,23 @@ const confirm = () => screen.getByRole("button", { name: "确认选择" });
 const choose = (id: string) => screen.getByRole("button", { name: `选择 ${id}.png` });
 
 describe("AssetPickerDialog", () => {
+  it("caps cross-page multiple selections, permits deselection and confirms full assets", async () => {
+    const first = asset("first"), later = asset("later"), extra = asset("extra");
+    vi.spyOn(api, "assets").mockImplementation(async (_kind, options) => options?.cursor ? page([later, extra]) : page([first], "next"));
+    const onSelectMany = vi.fn();
+    render(<AssetPickerDialog maxSelection={2} onSelectMany={onSelectMany} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "选择 first.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择 later.png" }));
+    expect(choose("extra")).toBeDisabled();
+    expect(screen.getByText("已选择 2 / 2 张图片")).toBeInTheDocument();
+    fireEvent.click(choose("later"));
+    expect(choose("extra")).toBeEnabled();
+    fireEvent.click(choose("extra"));
+    fireEvent.click(confirm());
+    expect(onSelectMany).toHaveBeenCalledExactlyOnceWith([first, extra]);
+  });
+
   it("queries editable assets with server-side kinds, cursors and page sizes", async () => {
     const fetcher = vi.fn(async (url: string) => {
       const query = new URL(url, "http://localhost").searchParams;

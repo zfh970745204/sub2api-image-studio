@@ -15,6 +15,7 @@ class OperationSeed:
 
 
 OPERATION_SEEDS = (
+    OperationSeed("image.toolbox", "基础图片处理", "local_code", "image-jobs", 0, 180, 2),
     OperationSeed("ai.generate", "AI 生成图案", "sub2api", "image-jobs", 20, 240, 3),
     OperationSeed("ai.ecommerce", "电商主图", "sub2api", "image-jobs", 20, 2400, 2),
     OperationSeed("ai.redraw", "高清重绘", "sub2api", "image-jobs", 18, 240, 3),

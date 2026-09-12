@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import tempfile
@@ -9,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from arq.connections import RedisSettings, create_pool
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import and_, asc, desc, or_, select
@@ -19,6 +20,7 @@ from app.api.dependencies import Principal, get_current_principal, require_permi
 from app.api.errors import ApiError
 from app.domain.ids import uuid7
 from app.domain.jobs import JOB_STATUSES
+from app.domain.toolbox import ToolboxOptions, ToolboxParameters
 from app.object_storage import ObjectStorageError
 from app.repositories.models import (
     ImageJob,
@@ -45,6 +47,22 @@ TaskManager = Annotated[Principal, Depends(require_permission("tasks.manage"))]
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=255)]
 CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
 QUEUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$")
+
+
+class ToolboxQuoteRequest(BaseModel):
+    asset_ids: list[uuid.UUID] = Field(min_length=1, max_length=50)
+    options: ToolboxOptions
+    batch_name: str = Field(default="图片处理", min_length=1, max_length=80)
+    filename_prefix: str = Field(default="", max_length=80)
+
+
+class ToolboxSubmitItem(BaseModel):
+    quote_id: uuid.UUID
+    parameters: ToolboxParameters
+
+
+class ToolboxSubmitRequest(BaseModel):
+    items: list[ToolboxSubmitItem] = Field(min_length=1, max_length=50)
 
 
 class QuoteRequest(BaseModel):
@@ -296,10 +314,16 @@ async def job_page(
     cursor: uuid.UUID | None,
     limit: int,
     order: Literal["asc", "desc"] = "desc",
+    operation_code: str | None = None,
+    batch_id: uuid.UUID | None = None,
 ) -> tuple[list[ImageJob], str | None]:
     if status_filter is not None and status_filter not in {*JOB_STATUSES, "refunded"}:
         raise ApiError(422, "VALIDATION_ERROR", "无效的任务状态")
     statement = select(ImageJob)
+    if operation_code:
+        statement = statement.where(ImageJob.operation_code == operation_code)
+    if batch_id:
+        statement = statement.where(ImageJob.parameters["batch_id"].as_string() == str(batch_id))
     if user_id is not None:
         statement = statement.where(ImageJob.user_id == user_id)
     if status_filter == "refunded":
@@ -365,6 +389,108 @@ async def list_operations(request: Request, principal: CurrentUser) -> dict[str,
         ]
         await session.commit()
     return {"items": items}
+
+
+@router.post("/api/v1/toolbox/quote", status_code=status.HTTP_201_CREATED)
+async def quote_toolbox(payload: ToolboxQuoteRequest, request: Request, principal: JobCreator):
+    if len(set(payload.asset_ids)) != len(payload.asset_ids):
+        raise ApiError(422, "DUPLICATE_ASSETS", "同一批次不能重复选择图片")
+    batch_id = uuid7()
+    items = []
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        for index, asset_id in enumerate(payload.asset_ids, 1):
+            asset = await AssetService().require_usable(
+                session, asset_id, owner_id=principal.user_id
+            )
+            stem = (
+                payload.filename_prefix.strip()
+                or (asset.original_filename or "image").rsplit(".", 1)[0]
+            )
+            stem = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", stem).strip(". ")[:100] or "image"
+            parameters = ToolboxParameters(
+                options=payload.options,
+                batch_id=batch_id,
+                batch_name=payload.batch_name,
+                output_name=f"{stem}-{index:03d}.{payload.options.format}",
+            ).model_dump(mode="json")
+            quote = await service.create_quote(
+                session,
+                user_id=principal.user_id,
+                operation_code="image.toolbox",
+                source_asset_id=asset_id,
+                parameters=parameters,
+                ttl_seconds=request.app.state.settings.job_quote_ttl_seconds,
+                request_id=request_id(request),
+            )
+            items.append(
+                {
+                    "source_asset_id": str(asset_id),
+                    "quote": quote_payload(quote),
+                    "parameters": parameters,
+                }
+            )
+        await session.commit()
+    return {
+        "batch_id": str(batch_id),
+        "items": items,
+        "total_points": sum(item["quote"]["final_points"] for item in items),
+    }
+
+
+@router.post("/api/v1/toolbox/submit", status_code=status.HTTP_201_CREATED)
+async def submit_toolbox(
+    payload: ToolboxSubmitRequest,
+    request: Request,
+    principal: JobCreator,
+    background_tasks: BackgroundTasks,
+):
+    if (
+        len({item.quote_id for item in payload.items}) != len(payload.items)
+        or len({item.parameters.batch_id for item in payload.items}) != 1
+    ):
+        raise ApiError(422, "INVALID_TOOLBOX_BATCH", "报价不能重复且必须属于同一批次")
+    jobs = []
+    created_jobs = []
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        for item in payload.items:
+            quote = await session.get(JobQuote, item.quote_id)
+            if (
+                quote is None
+                or quote.user_id != principal.user_id
+                or quote.operation_code != "image.toolbox"
+            ):
+                raise ApiError(404, "JOB_QUOTE_NOT_FOUND", "工具箱报价不存在")
+            parameters = item.parameters.model_dump(mode="json")
+            job, created = await service.create_job(
+                session,
+                user_id=principal.user_id,
+                quote_id=item.quote_id,
+                parameters=parameters,
+                idempotency_key=f"toolbox:{item.quote_id}",
+                request_fingerprint=service.request_fingerprint(
+                    principal.user_id, item.quote_id, parameters
+                ),
+                request_id=request_id(request),
+            )
+            jobs.append(job)
+            if created:
+                created_jobs.append(job)
+        # One transaction: insufficient points or an invalid source cannot leave a half-submitted batch.
+        await session.commit()
+        for job in jobs:
+            await session.refresh(job)
+        result = [job_payload(job) for job in jobs]
+
+    async def dispatch():
+        for offset in range(0, len(created_jobs), 2):
+            await asyncio.gather(
+                *(enqueue_job(request, job) for job in created_jobs[offset : offset + 2])
+            )
+
+    # Jobs are durable now. Slow/unavailable Redis must not hold the submit response open;
+    # the existing queue reconciler also recovers undelivered jobs after a restart.
+    background_tasks.add_task(dispatch)
+    return {"items": result}
 
 
 @router.post("/api/v1/jobs/quote", status_code=status.HTTP_201_CREATED)
@@ -442,6 +568,8 @@ async def list_my_jobs(
     status_filter: str | None = Query(default=None, alias="status"),
     cursor: uuid.UUID | None = None,
     limit: int = Query(default=20, ge=1, le=100),
+    operation_code: str | None = Query(default=None, max_length=64),
+    batch_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     database = request.app.state.runtime_services.database
     async with database.session_factory() as session:
@@ -451,6 +579,8 @@ async def list_my_jobs(
             status_filter=status_filter,
             cursor=cursor,
             limit=limit,
+            operation_code=operation_code,
+            batch_id=batch_id,
         )
     return {"items": [job_payload(item) for item in items], "next_cursor": next_cursor}
 

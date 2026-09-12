@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import tempfile
 import uuid
+import zipfile
 from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, func, select
@@ -34,6 +37,61 @@ AssetWriter = Annotated[Principal, Depends(require_permission("assets.write_own"
 AssetDeleter = Annotated[Principal, Depends(require_permission("assets.delete_own"))]
 AdminAssetReader = Annotated[Principal, Depends(require_permission("assets.read"))]
 AdminAssetManager = Annotated[Principal, Depends(require_permission("assets.manage"))]
+
+
+class AssetBundleRequest(BaseModel):
+    asset_ids: list[uuid.UUID] = Field(min_length=1, max_length=50)
+
+
+@router.post("/api/v1/assets/download-bundle")
+async def download_asset_bundle(
+    payload: AssetBundleRequest, request: Request, principal: AssetReader
+):
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        assets = [
+            await service.require_usable(session, asset_id, owner_id=principal.user_id)
+            for asset_id in dict.fromkeys(payload.asset_ids)
+        ]
+        if sum(asset.size_bytes for asset in assets) > 256 * 1024 * 1024:
+            raise ApiError(413, "BUNDLE_TOO_LARGE", "单次打包最多 256 MB，请分批下载")
+    archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)  # noqa: SIM115
+    try:
+        total = 0
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for index, asset in enumerate(assets, 1):
+                data = await _storage(request).get_object(asset.object_key)
+                total += len(data)
+                if total > 256 * 1024 * 1024:
+                    raise ApiError(413, "BUNDLE_TOO_LARGE", "单次打包最多 256 MB")
+                name = re.sub(
+                    r'[\\/:*?"<>|\x00-\x1f]',
+                    "_",
+                    asset.original_filename or f"image.{asset.extension}",
+                ).strip(". ")[:160]
+                bundle.writestr(f"{index:03d}-{name}", data)
+        archive.seek(0)
+    except ObjectStorageError as exc:
+        archive.close()
+        raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "图片读取失败，请稍后重试") from exc
+    except BaseException:
+        archive.close()
+        raise
+
+    def chunks():
+        try:
+            while data := archive.read(256 * 1024):
+                yield data
+        finally:
+            archive.close()
+
+    return StreamingResponse(
+        chunks(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="images.zip"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 class CropRequest(BaseModel):
@@ -609,7 +667,11 @@ async def create_download_url(
             url = await _storage(request).presign_get(
                 asset.object_key,
                 expires_seconds=ttl_seconds,
-                download_filename=f"{asset.id}.{asset.extension}",
+                download_filename=(
+                    re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", asset.original_filename).strip(". ")[:160]
+                    if asset.operation_code == "image.toolbox" and asset.original_filename
+                    else f"{asset.id}.{asset.extension}"
+                ),
             )
         except ObjectStorageError as exc:
             raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "对象存储暂时不可用") from exc

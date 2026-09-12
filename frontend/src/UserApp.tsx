@@ -11,6 +11,7 @@ import { StudioTaskQueue } from "./StudioTaskQueue";
 import { BackgroundSelectionEditor } from "./BackgroundSelectionEditor";
 import { InfoHint } from "./InfoHint";
 import { CropEditor } from "./CropEditor";
+import { ToolboxPage } from "./ToolboxPage";
 import { createSelectionLoader } from "./selection-loader";
 import {
   AlertCircle,
@@ -92,11 +93,12 @@ import { ComparisonPreview } from "./ComparisonPreview";
 import { ToastMessage } from "./Toast";
 import { LandingPage } from "./LandingPage";
 
-type AppRoute = "home" | "studio" | "assets" | "jobs" | "points" | "membership" | "profile";
+type AppRoute = "home" | "studio" | "toolbox" | "assets" | "jobs" | "points" | "membership" | "profile";
 
 const ROUTES: Record<AppRoute, string> = {
   home: "/app",
   studio: "/app/studio",
+  toolbox: "/app/toolbox",
   assets: "/app/assets",
   jobs: "/app/jobs",
   points: "/app/points",
@@ -111,6 +113,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { id: "home", label: "工作台", icon: LayoutDashboard },
   { id: "studio", label: "图片编辑器", icon: WandSparkles },
+  { id: "toolbox", label: "图片工具箱", icon: Grid2X2 },
   { id: "assets", label: "素材库", icon: Images },
   { id: "jobs", label: "任务中心", icon: ListTodo },
   { id: "points", label: "积分流水", icon: Coins },
@@ -150,6 +153,7 @@ const OPERATION_META: Record<
   string,
   { label: string; description: string; icon: ComponentType<{ size?: number }>; source: boolean }
 > = {
+  "image.toolbox": { label: "基础图片处理", description: "图片压缩、转换、尺寸和背景合成", icon: Grid2X2, source: true },
   "ai.generate": { label: "AI 生成", description: "根据描述创建新图案", icon: Sparkles, source: false },
   "ai.ecommerce": { label: "电商主图", description: "一组产品，多张主图。参考产品外观，统一设计与色彩。", icon: Images, source: false },
   "ai.redraw": { label: "高清重绘", description: "保留内容并提升清晰度", icon: WandSparkles, source: true },
@@ -525,6 +529,7 @@ function AppShell({
 
   const page = (() => {
     if (route === "studio") return <StudioPage key={window.location.search} bootstrap={bootstrap} onBootstrap={onBootstrap} />;
+    if (route === "toolbox") return <ToolboxPage key={window.location.search} bootstrap={bootstrap} onBootstrap={onBootstrap} />;
     if (route === "assets") return <AssetsPage bootstrap={bootstrap} />;
     if (route === "jobs") return <JobsPage />;
     if (route === "points") return <PointsPage bootstrap={bootstrap} />;
@@ -799,12 +804,13 @@ function StudioPage({
     setError("");
     try {
       const [operationPayload, assetPayload] = await Promise.all([api.operations(), api.assets()]);
-      setOperations(operationPayload.items.filter((item) => item.enabled));
+      const editorOperations = operationPayload.items.filter((item) => item.enabled && item.code !== "image.toolbox");
+      setOperations(editorOperations);
       setAssets((current) => [...assetPayload.items, ...current.filter((item) => !assetPayload.items.some((loaded) => loaded.id === item.id))]);
       if (!initialJob) setOperationCode((current) =>
-        operationPayload.items.some((item) => item.enabled && item.code === current)
+        editorOperations.some((item) => item.code === current)
           ? current
-          : operationPayload.items.find((item) => item.enabled)?.code || "ai.generate",
+          : editorOperations[0]?.code || "ai.generate",
       );
       if (initialSource && !assetPayload.items.some((item) => item.id === initialSource)) {
         const payload = await api.asset(initialSource);
@@ -818,6 +824,10 @@ function StudioPage({
   }, []);
 
   useEffect(() => void loadStudio(), [loadStudio]);
+  useEffect(() => {
+    setPreviewMode("transparent");
+    setPreviewImage(null);
+  }, [operationCode]);
   useEffect(() => {
     if (!expanded) return;
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(false); };
@@ -1462,8 +1472,8 @@ function JobDrawer({ job: initialJob, onCancel, onClose }: { job: ImageJob; onCa
         <dl className="user-detail-list"><div><dt>处理进度</dt><dd>{job.progress}%</dd></div><div><dt>消耗积分</dt><dd>{job.charged_points}</dd></div><div><dt>尝试次数</dt><dd>{job.attempt_count}</dd></div><div><dt>退款状态</dt><dd>{job.refund_status === "refunded" ? "已退款" : "无退款"}</dd></div><div><dt>提交时间</dt><dd>{dateTime(job.created_at)}</dd></div><div><dt>完成时间</dt><dd>{dateTime(job.completed_at)}</dd></div></dl>
         {failed && <div className="user-failure-box"><AlertCircle size={18} /><span><strong>{job.error_message || (job.status === "cancelled" ? "任务已由你取消" : "图片处理未能完成")}</strong><small>{job.refund_status === "refunded" ? "本次消耗积分已自动退回。" : "系统正在核对退款状态。"}</small></span></div>}
         {job.status === "queued" && <button className="user-danger-button" onClick={() => void onCancel(job)} type="button"><XCircle size={17} />取消任务并退款</button>}
-        {failed && job.source_asset_id && <button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><RefreshCw size={17} />使用原素材重试</button>}
-        {job.status === "succeeded" && outputIds[0] && <><button className="user-primary" onClick={() => navigate(`/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><ImagePlus size={17} />{job.source_asset_id ? "在编辑器中查看前后对比" : "在编辑器中打开结果"}</button>{outputIds.length > 1 && <button className="user-secondary" disabled={downloading} onClick={async () => { setDownloading(true); setError(""); try { await downloadJob(job.id); } catch (reason) { setError(messageOf(reason, "打包下载失败")); } finally { setDownloading(false); } }} type="button"><Download size={16} />下载整组结果</button>}</>}
+        {failed && job.source_asset_id && <button className="user-primary" onClick={() => navigate(`/app/${job.operation_code === "image.toolbox" ? "toolbox" : "studio"}?job=${encodeURIComponent(job.id)}`)} type="button"><RefreshCw size={17} />使用原素材重试</button>}
+        {job.status === "succeeded" && outputIds[0] && <><button className="user-primary" onClick={() => navigate(job.operation_code === "image.toolbox" ? `/app/studio?source=${encodeURIComponent(outputIds[0])}` : `/app/studio?job=${encodeURIComponent(job.id)}`)} type="button"><ImagePlus size={17} />{job.source_asset_id && job.operation_code !== "image.toolbox" ? "在编辑器中查看前后对比" : "在编辑器中打开结果"}</button>{outputIds.length > 1 && <button className="user-secondary" disabled={downloading} onClick={async () => { setDownloading(true); setError(""); try { await downloadJob(job.id); } catch (reason) { setError(messageOf(reason, "打包下载失败")); } finally { setDownloading(false); } }} type="button"><Download size={16} />下载整组结果</button>}</>}
       </aside>
     </div>
   );

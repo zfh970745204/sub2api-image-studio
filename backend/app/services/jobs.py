@@ -73,6 +73,7 @@ class ClaimedJob:
     timeout_seconds: int
     retention_days: int
     sub2api_config_version: int | None = None
+    max_image_megapixels: int = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,13 +165,18 @@ class JobService:
         if operation is None or not operation.enabled:
             raise ApiError(404, "OPERATION_NOT_AVAILABLE", "图片操作不存在或已停用")
         await self._validate_source_asset(session, source_asset_id=source_asset_id, user_id=user_id)
-        count = await self._validate_generation(
-            session, operation_code, canonical, source_asset_id, user_id
-        )
-        price = await self.current_price(session, operation.id, now=current_time)
         entitlement = await self.entitlements.current_snapshot(
             session, user_id, now=current_time, request_id=request_id
         )
+        count = await self._validate_generation(
+            session,
+            operation_code,
+            canonical,
+            source_asset_id,
+            user_id,
+            max_megapixels=entitlement.max_image_megapixels,
+        )
+        price = await self.current_price(session, operation.id, now=current_time)
         effective = dict(canonical)
         if operation_code.startswith("ai."):
             quality = effective.setdefault(
@@ -194,6 +200,7 @@ class JobService:
                 "discount_bps": entitlement.discount_bps,
                 "max_concurrent_jobs": entitlement.max_concurrent_jobs,
                 "retention_days": entitlement.retention_days,
+                "max_image_megapixels": entitlement.max_image_megapixels,
             },
             pricing_version=price.version,
             base_points=price.base_points * count,
@@ -269,7 +276,12 @@ class JobService:
             session, source_asset_id=quote.source_asset_id, user_id=user_id
         )
         await self._validate_generation(
-            session, quote.operation_code, canonical, quote.source_asset_id, user_id
+            session,
+            quote.operation_code,
+            canonical,
+            quote.source_asset_id,
+            user_id,
+            max_megapixels=int(quote.membership_snapshot.get("max_image_megapixels", 16)),
         )
         operation = (
             await session.scalars(
@@ -490,6 +502,9 @@ class JobService:
                 job.pricing_snapshot.get("membership", {}).get("retention_days", 30)
             ),
             sub2api_config_version=_sub2api_config_version(job.pricing_snapshot),
+            max_image_megapixels=int(
+                job.pricing_snapshot.get("membership", {}).get("max_image_megapixels", 16)
+            ),
         )
 
     async def complete_job(
@@ -1270,9 +1285,45 @@ class JobService:
         )
 
     @staticmethod
-    async def _validate_generation(session, code, parameters, source_id, user_id) -> int:
+    async def _validate_generation(
+        session, code, parameters, source_id, user_id, *, max_megapixels=16
+    ) -> int:
         from app.domain.jobs import ECOMMERCE_PLATFORMS
         from app.domain.print_extraction import print_options
+
+        if code == "image.toolbox":
+            from pydantic import ValidationError
+
+            from app.domain.toolbox import ToolboxParameters, check_dimensions, output_dimensions
+
+            try:
+                parsed = ToolboxParameters.model_validate(parameters)
+                if source_id is None:
+                    raise ValueError("请选择来源图片")
+                ids = [source_id]
+                if parsed.options.background == "image":
+                    ids.append(parsed.options.background_asset_id)
+                for asset_id in ids:
+                    asset = await session.get(Asset, asset_id)
+                    if asset is None or asset.owner_id != user_id or asset.status != "ready":
+                        raise ApiError(404, "SOURCE_ASSET_NOT_FOUND", "来源或背景素材不存在")
+                    if asset.kind not in {"original", "result"} or asset.mime_type not in {
+                        "image/png",
+                        "image/jpeg",
+                        "image/webp",
+                    }:
+                        raise ValueError("请选择静态 PNG、JPG 或 WebP 图片")
+                    check_dimensions(asset.width or 0, asset.height or 0)
+                    if asset_id == source_id and (
+                        not parsed.options.trim or parsed.options.resize in {"fill", "stretch"}
+                    ):
+                        check_dimensions(
+                            *output_dimensions(asset.width, asset.height, parsed.options),
+                            max_megapixels,
+                        )
+            except (ValidationError, ValueError) as exc:
+                raise ApiError(422, "INVALID_TOOLBOX_OPTIONS", str(exc)) from exc
+            return 1
 
         if code == "ai.extract_print":
             try:

@@ -96,16 +96,16 @@ def _prepare_raster(
             image = image.convert("RGBA" if has_alpha else "RGB")
             output = BytesIO()
             if preserve_format:
-                output_format = source.format
-            else:
-                output_format = "WEBP" if kind == "thumbnail" else "PNG"
-            if output_format == "WEBP":
+                # Recovery must describe the stored bytes, including their exact hash and size.
+                mime_type, extension = {
+                    "PNG": ("image/png", "png"),
+                    "JPEG": ("image/jpeg", "jpg"),
+                    "WEBP": ("image/webp", "webp"),
+                }[source.format]
+                output.write(raw)
+            elif kind == "thumbnail":
                 image.save(output, format="WEBP", quality=88, method=6)
                 mime_type, extension = "image/webp", "webp"
-            elif output_format == "JPEG":
-                image.convert("RGB").save(output, format="JPEG", quality=95, optimize=True)
-                mime_type, extension = "image/jpeg", "jpg"
-                has_alpha = False
             else:
                 image.save(output, format="PNG", optimize=True)
                 mime_type, extension = "image/png", "png"

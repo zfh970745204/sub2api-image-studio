@@ -13,6 +13,7 @@ from sqlalchemy import update
 from app.api.errors import ApiError
 from app.config import Settings
 from app.domain.print_extraction import PRINT_OUTPUT_SIZES, print_options, print_output_size
+from app.domain.toolbox import ToolboxParameters
 from app.image_ops import (
     ImageInputError,
     apply_color_effect,
@@ -35,6 +36,7 @@ from app.services.configuration import (
     sub2api_profile_settings,
 )
 from app.services.cutout_process import BackgroundRemovalRunner
+from app.services.image_toolbox import encoded_asset, process_image
 from app.services.jobs import ClaimedJob, PermanentJobError, RetryableJobError
 from app.services.security import SecurityService
 from app.smart_cutout import prepare_smart_cutout
@@ -145,11 +147,15 @@ class ImageJobExecutor:
                     if edit_source_data is not None
                     else None
                 )
-                prepared = await asyncio.to_thread(
-                    prepare_asset,
-                    output,
-                    kind="vector" if extension == "svg" else "result",
-                    max_megapixels=200,
+                prepared = (
+                    await asyncio.to_thread(encoded_asset, output, extension)
+                    if claim.operation_code == "image.toolbox"
+                    else await asyncio.to_thread(
+                        prepare_asset,
+                        output,
+                        kind="vector" if extension == "svg" else "result",
+                        max_megapixels=200,
+                    )
                 )
                 asset = await self.assets.store(
                     self.database,
@@ -167,6 +173,9 @@ class ImageJobExecutor:
                         else None
                     ),
                     source_job_id=claim.job_id,
+                    original_filename=claim.parameters.get("output_name")
+                    if claim.operation_code == "image.toolbox"
+                    else None,
                     metadata=metadata,
                     publish=False,
                     request_id=f"job:{claim.job_id}",
@@ -269,6 +278,27 @@ class ImageJobExecutor:
     ) -> tuple[bytes, str, str | None, dict[str, Any]]:
         operation = claim.operation_code
         parameters = claim.parameters
+        if operation == "image.toolbox":
+            self._require_source(source)
+            parsed = ToolboxParameters.model_validate(parameters)
+            background = None
+            if parsed.options.background == "image":
+                background = await self._source_data(
+                    replace(claim, source_asset_id=parsed.options.background_asset_id)
+                )
+            prepared, metadata = await asyncio.to_thread(
+                process_image,
+                source,
+                parsed.options,
+                background,
+                max_megapixels=claim.max_image_megapixels,
+            )
+            return (
+                prepared.data,
+                prepared.extension,
+                None,
+                {**metadata, "batch_id": str(parsed.batch_id), "batch_name": parsed.batch_name},
+            )
         if operation == "ai.generate":
             clients = await self._sub2api_clients(claim)
             refs = await self._references(claim, source)
