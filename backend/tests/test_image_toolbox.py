@@ -125,7 +125,9 @@ def test_text_and_image_watermarks_honor_position_scale_and_opacity():
     )
     with Image.open(BytesIO(text.data)) as image:
         assert any(image.getpixel((x, y))[0] > 200 for y in range(35) for x in range(55))
-        assert not any(image.getpixel((x, y))[0] > 200 for y in range(65, 100) for x in range(55, 100))
+        assert not any(
+            image.getpixel((x, y))[0] > 200 for y in range(65, 100) for x in range(55, 100)
+        )
 
     watermark = png(Image.new("RGBA", (80, 40), (0, 255, 0, 255)))
     image_result, _ = process_image(
@@ -325,7 +327,9 @@ async def test_batch_submission_rolls_back_all_items_if_later_source_disappears(
 
 
 @pytest.mark.asyncio
-async def test_quote_rejects_foreign_background_or_watermark_duplicates_and_account_size_limit(asset_context):
+async def test_quote_rejects_foreign_background_or_watermark_duplicates_and_account_size_limit(
+    asset_context,
+):
     async with asset_context.database.session_factory() as session:
         plan = await session.scalar(select(MembershipPlan).where(MembershipPlan.code == "free"))
         plan.max_image_megapixels = 1

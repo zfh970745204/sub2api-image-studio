@@ -152,7 +152,8 @@ def _apply_watermark(
             (padding - bounds[0], padding - bounds[1]),
             options.watermark_text,
             font=font,
-            fill=ImageColor.getrgb(options.watermark_color) + (round(255 * options.watermark_opacity / 100),),
+            fill=ImageColor.getrgb(options.watermark_color)
+            + (round(255 * options.watermark_opacity / 100),),
         )
     else:
         if watermark is None:
@@ -165,7 +166,9 @@ def _apply_watermark(
             lambda value: round(value * options.watermark_opacity / 100)
         )
         overlay.putalpha(alpha)
-    canvas.alpha_composite(overlay, _watermark_position(canvas.size, overlay.size, options.watermark_position))
+    canvas.alpha_composite(
+        overlay, _watermark_position(canvas.size, overlay.size, options.watermark_position)
+    )
     return canvas
 
 

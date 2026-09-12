@@ -30,7 +30,15 @@ class ToolboxOptions(BaseModel):
     watermark_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
     watermark_asset_id: uuid.UUID | None = None
     watermark_position: Literal[
-        "top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right"
+        "top-left",
+        "top",
+        "top-right",
+        "left",
+        "center",
+        "right",
+        "bottom-left",
+        "bottom",
+        "bottom-right",
     ] = "bottom-right"
     watermark_opacity: int = Field(default=35, ge=1, le=100, strict=True)
     watermark_scale: int = Field(default=25, ge=5, le=80, strict=True)
