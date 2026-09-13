@@ -50,6 +50,12 @@
 .studio-output-settings { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--user-soft-line); }
 .studio-output-settings:empty { display: none; }
 .studio-settings-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.studio-shot-plan { padding: 10px 12px; border: 1px solid var(--user-soft-line); border-radius: 8px; background: var(--user-surface); }
+.studio-shot-plan > header { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; font-size: 11px; }
+.studio-shot-plan ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; margin: 0; padding: 0; list-style: none; }
+.studio-shot-plan li { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 11px; }
+.studio-shot-plan li > span { color: var(--user-accent); font-variant-numeric: tabular-nums; font-size: 10px; }
+.studio-shot-plan li .studio-info-hint { margin-left: auto; }
 .user-studio-controls .user-field.studio-setting-row, .user-studio-controls .studio-setting-row > .user-field { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 12px; }
 .user-studio-controls .user-color-field { margin: 0; }
 .studio-source-picker { display: grid; gap: 8px; }

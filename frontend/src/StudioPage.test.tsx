@@ -22,9 +22,14 @@ const bootstrap = {
   notifications: { unread_count: 0 },
   preferences: { theme: "light", studio_layout: { last_tool: "ai.generate" } },
 };
-const operations = ["ai.generate", "ai.redraw", "color.effect", "ai.extract_print"].map((code) => ({
+const ecommercePlan = { version: "listing-set-v1", shots: [
+  ["hero", "商品主图"], ["lifestyle", "使用场景"], ["craft_detail", "工艺特写"], ["scale", "比例展示"], ["structure", "结构细节"],
+  ["arrangement", "搭配陈列"], ["overview", "俯拍构图"], ["editorial", "氛围海报"],
+].map(([code, label]) => ({ code, label, description: `${label}构图说明` })) };
+const operations = ["ai.generate", "ai.redraw", "color.effect", "ai.extract_print", "ai.ecommerce"].map((code) => ({
   id: code, code, name: code, engine_type: code.startsWith("ai") ? "sub2api" : "local", enabled: true,
   member_base_points: 20, current_price: { base_points: 20 },
+  ...(code === "ai.ecommerce" ? { ecommerce_plan: ecommercePlan } : {}),
 }));
 const quote = { id: "quote-1", operation_code: "ai.generate", base_points: 20, discount_points: 0, surcharge_points: 0, final_points: 20, expires_at: "2099-01-01T00:00:00Z" };
 const job = { id: "job-1", operation_code: "ai.generate", status: "queued", progress: 0, charged_points: 20 };
@@ -80,6 +85,48 @@ describe("Studio task workflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
     return screen.findByRole("dialog", { name: "任务报价" });
   }
+
+  it("shows the server's set plan by count and quotes the original product reference", async () => {
+    sourceAssets = [{ ...result, id: "source-1", kind: "original" }];
+    window.history.replaceState({}, "", "/app/studio?tool=ai.ecommerce");
+    render(<UserApp />);
+    const count = await screen.findByRole("combobox", { name: "套图张数" });
+    expect(count).toHaveValue("5");
+    const plan = await screen.findByRole("region", { name: "套图内容" });
+    expect(within(plan).getAllByRole("listitem")).toHaveLength(5);
+    expect(plan).toHaveTextContent("结构细节");
+    fireEvent.change(count, { target: { value: "3" } });
+    expect(within(plan).getAllByRole("listitem")).toHaveLength(3);
+    expect(plan).not.toHaveTextContent("结构细节");
+    fireEvent.click(screen.getByRole("button", { name: "从素材库添加参考图" }));
+    const picker = await screen.findByRole("dialog", { name: "从素材库添加参考图" });
+    fireEvent.click(await within(picker).findByRole("button", { name: /选择 原图/ }));
+    fireEvent.click(within(picker).getByRole("button", { name: "确认选择" }));
+    fireEvent.change(screen.getByLabelText("电商平台"), { target: { value: "etsy" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始创作" }));
+    await screen.findByRole("dialog", { name: "任务报价" });
+    const posted = JSON.parse(String(fetchMock.mock.calls.find(([url]) => url === "/api/v1/jobs/quote")![1]?.body));
+    expect(posted).toMatchObject({ operation_code: "ai.ecommerce", source_asset_id: "source-1",
+      parameters: { platform: "etsy", image_count: 3, reference_asset_ids: ["source-1"] } });
+  });
+
+  it("uses persisted shot labels for set results and keeps legacy thumbnails unlabelled", async () => {
+    const first = { ...result, metadata: { shot_label: "商品主图" } };
+    const legacy = { ...result, id: "result-2" };
+    restoredJob = { ...job, operation_code: "ai.ecommerce", status: "succeeded", output_asset_id: first.id,
+      output_asset_ids: [first.id, legacy.id], parameters: { image_count: 2, platform: "etsy" } };
+    events.mockImplementation(async () => response({ job: restoredJob }));
+    assetRead.mockImplementation(async () => response({ asset: first }));
+    const originalFetch = fetchMock.getMockImplementation()! as (url: string, init?: RequestInit) => Promise<Response>;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => url === "/api/v1/assets/result-2"
+      ? Promise.resolve(response({ asset: legacy })) : originalFetch(url, init));
+    window.history.replaceState({}, "", "/app/studio?job=job-1");
+    render(<UserApp />);
+    const gallery = await screen.findByRole("region", { name: "本次任务全部结果" });
+    expect(within(gallery).getByRole("button", { name: "查看第 1 张结果：商品主图" })).toBeInTheDocument();
+    expect(within(gallery).getByRole("button", { name: "查看第 2 张结果" })).toHaveTextContent("02");
+    expect(gallery).not.toHaveTextContent("使用场景");
+  });
 
   it("uses the full original selected on the picker's second page for preview and the submitted quote", async () => {
     const first = { ...result, original_filename: "已有结果.png" };

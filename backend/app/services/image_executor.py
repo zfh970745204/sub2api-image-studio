@@ -12,6 +12,7 @@ from sqlalchemy import update
 
 from app.api.errors import ApiError
 from app.config import Settings
+from app.domain.ecommerce import PLAN_VERSION, listing_plan, listing_prompt
 from app.domain.print_extraction import PRINT_OUTPUT_SIZES, print_options, print_output_size
 from app.domain.toolbox import ToolboxParameters
 from app.image_ops import (
@@ -488,35 +489,20 @@ class ImageJobExecutor:
         parameters = claim.parameters
         count = int(parameters.get("image_count", 1))
         platform = parameters.get("platform", "amazon")
-        briefs = {
-            "amazon": "Amazon style. First image: pure white RGB255 background, product only, centered and uncropped, no props or text. Subsequent images: clean detail or use-context photography, no invented claims.",
-            "etsy": "Etsy style: tactile materials, warm natural daylight, considered handmade-product styling. Keep the actual item prominent.",
-            "shopify": "Shopify brand storefront: refined editorial photography, restrained palette, consistent studio lighting.",
-            "taobao": "Taobao/Tmall product listing: clean commercial photography, immediately legible product silhouette, deliberate negative space.",
-            "jd": "JD product listing: precise materials, uncluttered studio photography, realistic proportions, clean background.",
-            "douyin": "Douyin product listing: natural contemporary lifestyle scene, strong product visibility, clean mobile-friendly composition.",
-        }
-        shots = [
-            "hero product view",
-            "closer material and print detail",
-            "natural use-context view",
-            "alternate crop of the same visible side",
-            "studio composition",
-            "close texture detail",
-            "minimal lifestyle composition",
-            "final catalog view",
-        ]
+        plan = listing_plan(count)
         anchor = None
-        for index in range(count):
-            prompt = (
-                f"Create ONE separate ecommerce product photograph, image {index + 1} of {count}: {shots[index]}. "
-                f"{briefs[platform]} User brief: {parameters.get('prompt', '')}. "
-                "All input photos describe the SAME product. Preserve exact design, print, lettering, color, proportions, materials and distinctive details. "
-                "When the final input is a generated hero image, treat it as the visual identity anchor for this collection. "
-                "Change only composition, background and lighting as appropriate. Do not invent unseen product features, accessories, labels or specifications. "
-                "No collage, contact sheet, frame, watermark, marketing text or badges. Produce a single image filling the canvas."
+        for index, shot in enumerate(plan):
+            prompt = listing_prompt(
+                index=index,
+                count=count,
+                platform=platform,
+                brief=str(parameters.get("prompt", "")),
+                reference_count=len(refs),
+                has_generated_anchor=anchor is not None,
             )
-            images = [*refs, *([anchor] if anchor is not None else [])]
+            # Real references remain authoritative on EVERY shot. Feeding a generated
+            # lifestyle scene back as an anchor copies its staging and compounds design drift.
+            images = refs if refs else ([anchor] if anchor is not None else [])
             options = {
                 "prompt": prompt,
                 "size": str(parameters.get("size", "1024x1024")),
@@ -536,7 +522,7 @@ class ImageJobExecutor:
                     clients,
                     lambda client, options=options: client.generate(**options),
                 )
-            if anchor is None:
+            if not refs and anchor is None:
                 anchor = upstream.data
             yield (
                 upstream.data,
@@ -547,7 +533,10 @@ class ImageJobExecutor:
                     "image_index": index + 1,
                     "image_count": count,
                     "reference_asset_ids": parameters.get("reference_asset_ids", []),
-                    "identity_anchor": "first-output",
+                    "identity_anchor": "original-references" if refs else "first-output",
+                    "shot_plan_version": PLAN_VERSION,
+                    "shot_role": shot.code,
+                    "shot_label": shot.label,
                     "revised_prompt": upstream.revised_prompt,
                 },
             )

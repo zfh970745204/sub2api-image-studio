@@ -121,6 +121,7 @@ export interface Operation {
   engine_type: string;
   enabled: boolean;
   member_base_points?: number;
+  ecommerce_plan?: { version: string; shots: { code: string; label: string; description: string }[] };
   current_price: { base_points: number; parameter_rules?: { rules?: PriceRule[] } } | null;
 }
 

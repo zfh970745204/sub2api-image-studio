@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import Principal, get_current_principal, require_permission
 from app.api.errors import ApiError
+from app.domain.ecommerce import public_listing_plan
 from app.domain.ids import uuid7
 from app.domain.jobs import JOB_STATUSES
 from app.domain.toolbox import ToolboxOptions, ToolboxParameters
@@ -183,6 +184,8 @@ def operation_payload(
         "updated_at": operation.updated_at,
         "current_price": price_payload(price) if price else None,
     }
+    if operation.code == "ai.ecommerce":
+        payload["ecommerce_plan"] = public_listing_plan()
     if price is not None and discount_bps is not None:
         payload["member_base_points"] = (price.base_points * discount_bps + 9_999) // 10_000
     return payload

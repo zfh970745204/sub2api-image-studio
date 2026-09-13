@@ -12,6 +12,7 @@ import { BackgroundSelectionEditor } from "./BackgroundSelectionEditor";
 import { InfoHint } from "./InfoHint";
 import { CropEditor } from "./CropEditor";
 import { ToolboxPage } from "./ToolboxPage";
+import { EcommerceShotPlan } from "./EcommerceShotPlan";
 import { createSelectionLoader } from "./selection-loader";
 import {
   AlertCircle,
@@ -155,7 +156,7 @@ const OPERATION_META: Record<
 > = {
   "image.toolbox": { label: "基础图片处理", description: "图片压缩、转换、尺寸和背景合成", icon: Grid2X2, source: true },
   "ai.generate": { label: "AI 生成", description: "根据描述创建新图案", icon: Sparkles, source: false },
-  "ai.ecommerce": { label: "电商主图", description: "一组产品，多张主图。参考产品外观，统一设计与色彩。", icon: Images, source: false },
+  "ai.ecommerce": { label: "电商主图", description: "生成同一商品的完整套图，包含主图、场景、特写等不同用途；以产品原图为依据保持外观、印花与文字一致。", icon: Images, source: false },
   "ai.redraw": { label: "高清重绘", description: "保留内容并提升清晰度", icon: WandSparkles, source: true },
   "ai.extract_print": { label: "印花提取", description: "从产品照片还原印花，保留设计与色彩，可选透明或原产品底色", icon: FileImage, source: true },
   "cutout.smart": { label: "智能抠图", description: "输出透明 PNG", icon: Scissors, source: true },
@@ -757,7 +758,7 @@ function StudioPage({
     printOutputMode: bootstrap.preferences.studio_layout.print_output_mode || "transparent",
     printOutputSize: "2048x2048",
     platform: "amazon",
-    imageCount: 4,
+    imageCount: 5,
     prompt: "",
     size: "1024x1024",
     quality: "high",
@@ -918,7 +919,7 @@ function StudioPage({
           printOutputMode: job.parameters.output_mode === "opaque" ? "opaque" : "transparent",
           printOutputSize: String(job.parameters.output_size || "2048x2048"),
           platform: String(job.parameters.platform || "amazon"),
-          imageCount: Number(job.parameters.image_count || 4),
+          imageCount: Number(job.parameters.image_count || 1),
           prompt: String(job.parameters.prompt || job.parameters.instruction || ""),
           size: String(job.parameters.size || current.size),
           quality: String(job.parameters.quality || current.quality),
@@ -1190,12 +1191,14 @@ function StudioPage({
             backgroundControls={<PreviewBackgroundControls color={previewColor} mode={previewMode} onColor={setPreviewColor} onImage={choosePreviewImage} onMode={setPreviewMode} previewRef={previewRef} />}
             onError={() => setError("图片预览加载失败，可尝试重新载入预览或下载图片。")}
             sourceOverlay={needsMask && !resultAsset && source?.width && source?.height ? <MaskCanvas key={`${sourceId}:${maskRevision}`} ref={brushRef} disabled={Boolean(busy)} width={source.width} height={source.height} onChange={() => { detachJob(); setMaskId(""); setQuote(null); }} /> : undefined}
-            empty={busy === "loading" ? <MiniLoading /> : isGeneration ? (
+            empty={busy === "loading" ? <MiniLoading /> : operationCode === "ai.ecommerce" ? (
+              <div className="user-canvas-empty generation"><span><Images size={32} /></span><small>PRODUCT PHOTO SET</small><strong>一个商品，一整套展示</strong><p>上传同一商品的参考图，<br />一次生成主图、使用场景与细节特写。</p><button className="user-secondary" type="button" onClick={() => uploadRef.current?.click()}><Upload size={15} />上传产品图</button></div>
+            ) : isGeneration ? (
               <div className="user-canvas-empty generation"><span><Sparkles size={32} /></span><small>YOUR NEXT CREATION</small><strong>把想象，变成看得见的作品</strong><p>在右侧写下你的想法，<br />选择尺寸与质量，即可开始创作。</p><div className="user-prompt-examples">{["极简植物线稿，米白背景，适合装饰画", "复古山脉与落日，丝网印刷风格"].map((prompt) => <button key={prompt} onClick={() => setForm({ ...form, prompt })} type="button">{prompt}<ArrowRight size={14} /></button>)}</div></div>
             ) : (
               <button className="user-canvas-empty" disabled={Boolean(busy)} onClick={() => uploadRef.current?.click()} type="button"><span><ImagePlus size={32} /></span><strong>放入图片，开始创作</strong><p>拖拽图片到这里，或点击上传</p><small>PNG / JPEG / WebP · 最大 {bootstrap.membership.entitlements.max_upload_mb} MB</small></button>
             )} />
-          {batchResults.length > 1 && <section className="studio-result-gallery" aria-label="本次任务全部结果"><header><strong>本次结果 <small>{batchResults.length} 张</small></strong><button type="button" className="user-secondary" disabled={downloadingBatch} onClick={async () => { if (!activeJob) return; setDownloadingBatch(true); try { await downloadJob(activeJob.id); } catch (reason) { setError(messageOf(reason)); } finally { setDownloadingBatch(false); } }}><Download size={14} />{downloadingBatch ? "打包中…" : "下载整组 ZIP"}</button></header><div>{batchResults.map((asset, index) => <button type="button" key={asset.id} aria-label={`查看第 ${index + 1} 张结果`} aria-pressed={resultAsset?.id === asset.id} onClick={() => setResultAsset(asset)}><ImageThumbnail id={asset.id} /><span>{String(index + 1).padStart(2, "0")}</span></button>)}</div></section>}
+          {batchResults.length > 1 && <section className="studio-result-gallery" aria-label="本次任务全部结果"><header><strong>{operationCode === "ai.ecommerce" ? "商品套图" : "本次结果"} <small>{batchResults.length} 张</small></strong><button type="button" className="user-secondary" disabled={downloadingBatch} onClick={async () => { if (!activeJob) return; setDownloadingBatch(true); try { await downloadJob(activeJob.id); } catch (reason) { setError(messageOf(reason)); } finally { setDownloadingBatch(false); } }}><Download size={14} />{downloadingBatch ? "打包中…" : "下载整组 ZIP"}</button></header><div>{batchResults.map((asset, index) => <button type="button" key={asset.id} aria-label={`查看第 ${index + 1} 张结果${typeof asset.metadata?.shot_label === "string" ? `：${asset.metadata.shot_label}` : ""}`} aria-pressed={resultAsset?.id === asset.id} onClick={() => setResultAsset(asset)}><ImageThumbnail id={asset.id} /><span>{String(index + 1).padStart(2, "0")}{typeof asset.metadata?.shot_label === "string" && ` · ${asset.metadata.shot_label}`}</span></button>)}</div></section>}
             {activeJob && ["queued", "running", "retry_wait"].includes(activeJob.status) && (
               <JobProgress job={activeJob} />
             )}
@@ -1217,7 +1220,7 @@ function StudioPage({
         <aside className="user-studio-controls">
           <header><h2>{meta.label}</h2><InfoHint label={`${meta.label}说明`}>{meta.description} {operationCode === "cutout.smart" || operationCode === "ai.extract_print" ? "完成后可用选区修边补选背景、取消误选并调整容差，手动修边不扣积分。" : ""}</InfoHint></header>
           <fieldset className="user-studio-fields" disabled={Boolean(busy)}>
-          {isGeneration && <section className="studio-references"><header><span>参考图片 <small>可选 · {referenceIds.length}/6</small></span><button type="button" onClick={() => uploadRef.current?.click()} disabled={referenceIds.length >= 6}><Plus size={14} />添加</button><button aria-label="从素材库添加参考图" title="从素材库添加参考图" disabled={referenceIds.length >= 6} onClick={() => setAssetPicker("reference")} type="button"><Images size={14} />素材库</button></header><div>{referenceIds.map((id, index) => <div key={id}><button type="button" aria-label={`查看参考图 ${index + 1}`} aria-pressed={sourceId === id} onClick={() => changeReferences([id, ...referenceIds.filter((value) => value !== id)])}><ImageThumbnail id={id} /><small>{index === 0 ? "主参考" : `参考 ${index + 1}`}</small></button><button className="studio-reference-remove" type="button" aria-label={`移除参考图 ${index + 1}`} onClick={() => changeReferences(referenceIds.filter((value) => value !== id))}><X size={12} /></button></div>)}{!referenceIds.length && <button className="studio-reference-empty" type="button" onClick={() => uploadRef.current?.click()}><ImagePlus size={20} /><span>上传产品或灵感图<small>支持多选，也可拖入画布</small></span></button>}</div></section>}
+          {isGeneration && <section className="studio-references"><header><span>{operationCode === "ai.ecommerce" ? "产品参考" : "参考图片"} <small>{operationCode === "ai.ecommerce" ? "建议上传" : "可选"} · {referenceIds.length}/6</small></span><button type="button" onClick={() => uploadRef.current?.click()} disabled={referenceIds.length >= 6}><Plus size={14} />添加</button><button aria-label="从素材库添加参考图" title="从素材库添加参考图" disabled={referenceIds.length >= 6} onClick={() => setAssetPicker("reference")} type="button"><Images size={14} />素材库</button></header><div>{referenceIds.map((id, index) => <div key={id}><button type="button" aria-label={`查看参考图 ${index + 1}`} aria-pressed={sourceId === id} onClick={() => changeReferences([id, ...referenceIds.filter((value) => value !== id)])}><ImageThumbnail id={id} /><small>{index === 0 ? "主参考" : `参考 ${index + 1}`}</small></button><button className="studio-reference-remove" type="button" aria-label={`移除参考图 ${index + 1}`} onClick={() => changeReferences(referenceIds.filter((value) => value !== id))}><X size={12} /></button></div>)}{!referenceIds.length && <button className="studio-reference-empty" type="button" onClick={() => uploadRef.current?.click()}><ImagePlus size={20} /><span>{operationCode === "ai.ecommerce" ? "上传同一商品的原图" : "上传产品或灵感图"}<small>{operationCode === "ai.ecommerce" ? "不同角度和细节有助于保持产品一致" : "支持多选，也可拖入画布"}</small></span></button>}</div></section>}
           {meta.source && (
             <section className="studio-source-picker" aria-label="来源素材">
               <header><span>来源素材</span><button className="studio-source-upload" aria-label={source ? "替换 / 上传图片" : "上传图片"} disabled={busy === "upload"} onClick={() => uploadRef.current?.click()} type="button">{busy === "upload" ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />}上传图片</button></header>
@@ -1226,7 +1229,7 @@ function StudioPage({
           )}
           <input accept="image/png,image/jpeg,image/webp" hidden multiple={isGeneration} onChange={(event) => { if (isGeneration) void uploadReferences(Array.from(event.target.files || [])); else void upload(event.target.files?.[0]); }} ref={uploadRef} type="file" />
           <div className="studio-output-settings" role="group" aria-label="处理设置">
-          {operationCode === "ai.ecommerce" && <div className="studio-settings-pair"><label className="user-field"><span>电商平台</span><select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}><option value="amazon">Amazon</option><option value="etsy">Etsy</option><option value="shopify">Shopify</option><option value="taobao">淘宝 / 天猫</option><option value="jd">京东</option><option value="douyin">抖音电商</option></select></label><label className="user-field"><span>生成张数</span><select value={form.imageCount} onChange={(event) => setForm({ ...form, imageCount: Number(event.target.value) })}>{Array.from({ length: 8 }, (_, i) => <option value={i + 1} key={i}>{i + 1} 张</option>)}</select></label></div>}
+          {operationCode === "ai.ecommerce" && <><div className="studio-settings-pair"><label className="user-field"><span>电商平台</span><select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}><option value="amazon">Amazon</option><option value="etsy">Etsy</option><option value="shopify">Shopify</option><option value="taobao">淘宝 / 天猫</option><option value="jd">京东</option><option value="douyin">抖音电商</option></select></label><label className="user-field"><span>套图张数</span><select value={form.imageCount} onChange={(event) => setForm({ ...form, imageCount: Number(event.target.value) })}>{Array.from({ length: 8 }, (_, i) => <option value={i + 1} key={i}>{i === 0 ? "1 张 · 仅主图" : `${i + 1} 张套图`}</option>)}</select></label></div><EcommerceShotPlan plan={selectedOperation?.ecommerce_plan} count={form.imageCount} /></>}
           {operationCode === "ai.extract_print" && <div className="studio-settings-pair">
             <Segmented label="输出背景" hint="透明模式去除背景；不透明模式保留自动识别的原产品颜色作为平整背景。" value={form.printOutputMode} options={[["transparent", "透明背景"], ["opaque", "不透明"]]} onChange={(value) => {
               const mode = value === "opaque" ? "opaque" : "transparent";
@@ -1243,7 +1246,7 @@ function StudioPage({
           {operationCode === "vectorize.svg" && <label className="user-field"><span>最大颜色数</span><input max="12" min="2" onChange={(event) => setForm({ ...form, maxColors: Number(event.target.value) })} type="number" value={form.maxColors} /></label>}
           </div>
           {operationCode.startsWith("ai.") && (
-            <label className="user-field studio-prompt-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : "说明需要保留或调整的内容"} rows={3} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
+            <label className="user-field studio-prompt-field"><span>{operationCode === "ai.generate" ? "图片描述" : operationCode === "ai.text_fix" ? "正确文字" : "补充要求（可选）"}</span><textarea maxLength={1500} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder={operationCode === "ai.generate" ? "例如：适合丝网印刷的复古山脉图案" : operationCode === "ai.ecommerce" ? "例如：用于日常饮茶，突出杯身印花与杯沿做工。产品原有文字、图案保持不变。" : "说明需要保留或调整的内容"} rows={3} value={form.prompt} /><small>{form.prompt.length} / 1500</small></label>
           )}
           </fieldset>
           <div className="user-studio-submit">
