@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from PIL import Image
+from PIL import Image, ImageChops
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, func, select
 
@@ -434,6 +434,7 @@ async def get_selection_context(
             "cutout.smart",
             "cutout.refine",
             "image.crop",
+            "image.edit",
         }
         or (asset.operation_code == "ai.extract_print" and bool(asset.has_alpha)),
     }
@@ -478,6 +479,20 @@ def _validate_selection_result(raw: bytes, width: int, height: int, max_megapixe
     return prepared
 
 
+def _raster_restore_layer(original: bytes, edited: bytes):
+    """Keep new paint, while retaining pre-erase coverage for later refinement."""
+    with Image.open(BytesIO(original)) as opened, Image.open(BytesIO(edited)) as changed:
+        before, after = opened.convert("RGBA"), changed.convert("RGBA")
+        alpha = after.getchannel("A")
+        # Visible edited RGB is authoritative, including paint in formerly
+        # transparent areas. Removed pixels recover the previous version's RGB.
+        restore = Image.composite(after, before, alpha.point(lambda value: 255 if value else 0))
+        restore.putalpha(ImageChops.lighter(before.getchannel("A"), alpha))
+        raw = BytesIO()
+        restore.save(raw, "PNG")
+    return prepare_asset(raw.getvalue(), kind="original", max_megapixels=16)
+
+
 @router.post("/api/v1/assets/{asset_id}/selection", status_code=status.HTTP_201_CREATED)
 async def save_selection(
     asset_id: uuid.UUID,
@@ -485,9 +500,29 @@ async def save_selection(
     principal: AssetWriter,
     image: Annotated[UploadFile, File()],
 ) -> dict[str, Any]:
+    return await _save_raster_result(asset_id, request, principal, image, basic_edit=False)
+
+
+@router.post("/api/v1/assets/{asset_id}/edit", status_code=status.HTTP_201_CREATED)
+async def save_raster_edit(
+    asset_id: uuid.UUID,
+    request: Request,
+    principal: AssetWriter,
+    image: Annotated[UploadFile, File()],
+) -> dict[str, Any]:
+    return await _save_raster_result(asset_id, request, principal, image, basic_edit=True)
+
+
+async def _save_raster_result(
+    asset_id: uuid.UUID, request: Request, principal, image: UploadFile, *, basic_edit: bool
+) -> dict[str, Any]:
     database = request.app.state.runtime_services.database
     async with database.session_factory() as session:
         base, source_key, limited = await _selection_source(session, asset_id, principal.user_id)
+        if basic_edit:
+            # Paint and fill apply to the current version, never to an older
+            # pre-cutout layer. Previous versions remain available separately.
+            source_key, limited = base.object_key, False
         entitlement = await entitlements.current_snapshot(
             session,
             principal.user_id,
@@ -529,6 +564,8 @@ async def save_selection(
         source = await asyncio.to_thread(
             prepare_asset, source_raw, kind="original", max_megapixels=16
         )
+        if basic_edit:
+            source = await asyncio.to_thread(_raster_restore_layer, source.data, prepared.data)
         asset = await service.store(
             database,
             storage,
@@ -536,11 +573,14 @@ async def save_selection(
             prepared=prepared,
             edit_source=source,
             kind="result",
-            operation_code="cutout.refine",
+            operation_code="image.edit" if basic_edit else "cutout.refine",
             parent_asset_id=base.id,
             retention_days=entitlement.retention_days,
-            original_filename="selection-refined.png",
-            metadata={"workflow": "background-selection", "edit_restore_limited": limited},
+            original_filename="image-edited.png" if basic_edit else "selection-refined.png",
+            metadata={
+                "workflow": "raster-edit" if basic_edit else "background-selection",
+                "edit_restore_limited": limited,
+            },
             request_id=getattr(request.state, "request_id", "selection-save"),
         )
     except AssetInputError as exc:

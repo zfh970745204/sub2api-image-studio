@@ -348,6 +348,11 @@ export const api = {
     body.append("image", image, "selection-refined.png");
     return request<{ asset: Asset }>(`/api/v1/assets/${id}/selection`, { method: "POST", body });
   },
+  saveRasterEdit: (id: string, image: Blob) => {
+    const body = new FormData();
+    body.append("image", image, "image-edited.png");
+    return request<{ asset: Asset }>(`/api/v1/assets/${id}/edit`, { method: "POST", body });
+  },
   printBackground: (id: string, point?: { x: number; y: number }) =>
     request<{ color: string; confidence: number; method: string }>(`/api/v1/assets/${id}/print-background${point ? `?x=${point.x}&y=${point.y}` : ""}`),
   lineage: (id: string) => request<{ items: Asset[] }>(`/api/v1/assets/${id}/lineage`),

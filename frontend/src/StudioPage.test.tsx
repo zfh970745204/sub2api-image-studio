@@ -13,6 +13,11 @@ vi.mock("./CropEditor", () => ({
     <div role="dialog" aria-label="裁切图片"><button onClick={() => onSaved({ ...asset, id: "cropped-1", parent_asset_id: asset.id, operation_code: "image.crop" })}>测试保存裁切</button></div>,
 }));
 
+vi.mock("./RasterEditorDialog", () => ({
+  RasterEditorDialog: ({ asset, onSaved }: { asset: Asset; onSaved: (value: Asset) => void }) =>
+    <div role="dialog" aria-label="基础编辑"><span>编辑素材 {asset.id}</span><button onClick={() => onSaved({ ...asset, id: "edited-1", parent_asset_id: asset.id, operation_code: "image.edit" })}>测试保存编辑</button></div>,
+}));
+
 const bootstrap = {
   user: { id: "user-1", display_name: "测试用户", email: "member@example.test" },
   permissions: ["studio.use", "tasks.create"],
@@ -108,6 +113,19 @@ describe("Studio task workflow", () => {
     const posted = JSON.parse(String(fetchMock.mock.calls.find(([url]) => url === "/api/v1/jobs/quote")![1]?.body));
     expect(posted).toMatchObject({ operation_code: "ai.ecommerce", source_asset_id: "source-1",
       parameters: { platform: "etsy", image_count: 3, reference_asset_ids: ["source-1"] } });
+  });
+
+  it("opens basic editing on the selected source and publishes a new result without AI submission", async () => {
+    sourceAssets = [{ ...result, id:"source-1", kind:"original" }];
+    window.history.replaceState({}, "", "/app/studio?tool=ai.redraw&source=source-1");
+    render(<UserApp />);
+    fireEvent.click(await screen.findByRole("button", { name:"基础编辑" }));
+    expect(screen.getByRole("dialog", { name:"基础编辑" })).toHaveTextContent("编辑素材 source-1");
+    fireEvent.click(screen.getByRole("button", { name:"测试保存编辑" }));
+    expect(await screen.findByText(/基础编辑已保存为新版本/)).toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name:"基础编辑" }));
+    expect(screen.getByRole("dialog", { name:"基础编辑" })).toHaveTextContent("编辑素材 edited-1");
   });
 
   it("uses persisted shot labels for set results and keeps legacy thumbnails unlabelled", async () => {

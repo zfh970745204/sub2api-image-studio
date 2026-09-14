@@ -149,6 +149,8 @@ def test_direct_extraction_rejects_painted_checkerboard_and_empty_alpha():
         ("ai.extract_print", "magenta", False, "transparent"),
         ("ai.extract_print", "opaque", True, "transparent"),
         ("ai.extract_print", "opaque", True, "opaque"),
+        ("ai.extract_print", "opaque_holes", True, "transparent"),
+        ("ai.extract_print", "opaque_holes", True, "opaque"),
         ("ai.extract_print", "empty", False, "transparent"),
         ("ai.redraw", "opaque", True, "opaque"),
     ],
@@ -183,6 +185,13 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
     calls = []
     if result_kind == "native":
         raw = native_print_image()
+    elif result_kind == "opaque_holes":
+        with Image.open(BytesIO(print_image("white"))) as image:
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((74, 74, 92, 90), fill="white")
+            buffer = BytesIO()
+            image.save(buffer, "PNG")
+            raw = buffer.getvalue()
     elif result_kind == "empty":
         buffer = BytesIO()
         Image.new("RGBA", (128, 128)).save(buffer, "PNG")
@@ -219,6 +228,7 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
     if operation == "ai.extract_print":
         assert "保持原有的色彩和内容不变".encode() in calls[0]
         assert "均匀纯色 #FFFFFF 背景".encode() in calls[0]
+        assert "字母孔洞、图案间隙和封闭轮廓".encode() in calls[0]
         assert b"#00FF00" not in calls[0] and b"#FF00FF" not in calls[0]
         assert b"Use ONLY a perfectly uniform" not in calls[0]
     else:
@@ -267,6 +277,10 @@ async def test_image_edit_pipeline_charges_publishes_alpha_or_refunds(
                     assert image.mode == "RGB" and output.has_alpha is False
                 if operation == "ai.extract_print" and mode == "transparent":
                     assert image.getpixel((1, 1))[3] == 0
+                    if result_kind == "opaque_holes":
+                        assert image.getpixel((82, 82))[3] == 0
+                        assert image.getpixel((70, 82)) == (0, 0, 0, 255)
+                        assert output.asset_metadata["enclosed_background_regions"] == 1
         else:
             assert job.status == "failed" and job.refund_status == "refunded"
             assert job.output_asset_id is None and balance == 200

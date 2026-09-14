@@ -1,4 +1,4 @@
-"""Extract against the product color; preserve ambiguous same-color interior ink."""
+"""Extract against the product color, including enclosed negative space."""
 
 from __future__ import annotations
 
@@ -95,6 +95,9 @@ def extract_prompt(color: str, instruction: str = "") -> str:
         "保留全部文字、字体、排版、比例和细节，包括白色与黑色印花。"
         "去掉产品外形、摄影背景、布料纹理、褶皱和阴影，校正透视，得到平整清晰的独立图案。"
         f"将完整印花放在均匀纯色 {color} 背景上，这是产品本身的底色。"
+        "背景包括印花外围，以及字母孔洞、图案间隙和封闭轮廓内露出的产品底色；"
+        "这些内部镂空必须与外围使用同一均匀底色，不要残留布料、阴影或填成实心。"
+        "若输出透明 PNG，外围与内部镂空都必须真正透明；原设计实际印刷的油墨仍要保留。"
         "背景不要有纹理、渐变或棋盘格，不要改变印花内部颜色，不添加描边或新元素。"
         "保留发丝、细线和烟雾的自然柔边，完整图案居中，四周留少量纯色边距。"
     )
@@ -170,14 +173,20 @@ def finish_print(raw: bytes, *, mode: str, color: str) -> tuple[bytes, dict[str,
     _, labels = cv2.connectedComponents(candidates, connectivity=8)
     boundary_labels = np.unique(_border(labels))
     boundary_labels = boundary_labels[boundary_labels != 0]
-    connected = np.isin(labels, boundary_labels) & (candidates != 0)
-    # Enclosed same-color shapes may be pupils/letter ink. Keep them rather than
-    # deleting every matching color; only evidenced exterior background is keyed.
+    # A closed letter counter is also background. Require a near-exact base-color
+    # core before keying an enclosed region, so isolated near-color ink is not
+    # removed solely because it falls within the wider soft-edge tolerance.
+    core_labels = np.unique(labels[distance <= 4])
+    enclosed_labels = np.setdiff1d(core_labels, boundary_labels)
+    background_labels = np.union1d(boundary_labels, enclosed_labels)
+    selected = np.isin(labels, background_labels) & (candidates != 0)
+    # Exact base-color ink is indistinguishable from a hole in a flat RGB image.
+    # The original extraction is retained as the edit source for manual restore.
     coverage = np.ones(distance.shape, dtype=np.float32)
-    coverage[connected] = np.clip((distance[connected] - 4) / 24, 0, 1)
+    coverage[selected] = np.clip((distance[selected] - 4) / 24, 0, 1)
     coverage[coverage < 0.04] = 0
     foreground = rgb.astype(np.float32)
-    edge = connected & (coverage > 0) & (coverage < 1)
+    edge = selected & (coverage > 0) & (coverage < 1)
     foreground[edge] = (foreground[edge] - (1 - coverage[edge, None]) * background) / coverage[
         edge, None
     ]
@@ -188,8 +197,10 @@ def finish_print(raw: bytes, *, mode: str, color: str) -> tuple[bytes, dict[str,
     result = np.dstack([np.uint8(np.clip(np.rint(foreground), 0, 255)), result_alpha])
     return _png(Image.fromarray(result)), {
         **metadata,
-        "method": "connected-product-color",
+        "method": "product-color-regions",
         "transparent_background": True,
         "estimated_background_color": [int(value) for value in background],
-        "color_preservation": "interior-ink-preserved",
+        "background_scope": "exterior-and-enclosed",
+        "enclosed_background_regions": len(enclosed_labels),
+        "color_preservation": "non-background-ink-preserved",
     }

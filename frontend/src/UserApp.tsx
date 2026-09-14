@@ -11,6 +11,7 @@ import { StudioTaskQueue } from "./StudioTaskQueue";
 import { BackgroundSelectionEditor } from "./BackgroundSelectionEditor";
 import { InfoHint } from "./InfoHint";
 import { CropEditor } from "./CropEditor";
+import { RasterEditorDialog } from "./RasterEditorDialog";
 import { ToolboxPage } from "./ToolboxPage";
 import { EcommerceShotPlan } from "./EcommerceShotPlan";
 import { createSelectionLoader } from "./selection-loader";
@@ -228,6 +229,7 @@ function operationName(code: string): string {
   if (code === "upload") return "上传原图";
   if (code === "cutout.refine") return "选区修边";
   if (code === "image.crop") return "裁切";
+  if (code === "image.edit") return "基础编辑";
   return OPERATION_META[code]?.label || code;
 }
 
@@ -790,6 +792,7 @@ function StudioPage({
   const [resultAsset, setResultAsset] = useState<Asset | null>(null);
   const [selectionAsset, setSelectionAsset] = useState<Asset | null>(null);
   const [cropAsset, setCropAsset] = useState<Asset | null>(null);
+  const [editAsset, setEditAsset] = useState<Asset | null>(null);
   const selectionLoader = useMemo(createSelectionLoader, []);
   useEffect(() => () => selectionLoader.clear(), [selectionLoader]);
   const [lineage, setLineage] = useState<Asset[]>([]);
@@ -848,7 +851,7 @@ function StudioPage({
   const refinementTarget = resultAsset || source;
   const canRefine = refinementTarget && ["original", "result"].includes(refinementTarget.kind) && (
     operationCode === "cutout.smart" || (operationCode === "ai.extract_print" && resultAsset) ||
-    ["cutout.smart", "cutout.refine", "ai.extract_print", "image.crop"].includes(refinementTarget.operation_code)
+    ["cutout.smart", "cutout.refine", "ai.extract_print", "image.crop", "image.edit"].includes(refinementTarget.operation_code)
   );
   const sourceUrl = useSignedAssetUrl(compareSource ? source?.id || null : null, previewRevision, (reason) => setError(messageOf(reason, "原图预览地址获取失败")));
   const resultUrl = useSignedAssetUrl(resultAsset?.id || null, previewRevision, (reason) => setError(messageOf(reason, "结果预览地址获取失败")));
@@ -1184,7 +1187,7 @@ function StudioPage({
           <header className="user-canvas-head">
             <span><FileImage size={17} /><strong>{compareSource ? "原图与结果" : "创作预览"}</strong></span>
             <div className="user-preview-actions"><button aria-label={expanded ? "收起画布" : "展开画布"} className="user-icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起画布（Esc）" : "展开画布"} type="button">{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>{(source || resultAsset) && <button aria-label="重新载入预览" className="user-icon-button" onClick={() => { setError(""); setPreviewRevision((value) => value + 1); }} title="重新载入预览" type="button"><RefreshCw size={15} /></button>}</div>
-            <div className="user-canvas-actions">{refinementTarget && ["original", "result"].includes(refinementTarget.kind) && <button className="user-secondary compact" disabled={Boolean(busy)} onClick={() => { detachJob(); setCropAsset(refinementTarget); }} type="button"><Crop size={16} />裁切</button>}{canRefine && <button className="user-secondary compact" disabled={Boolean(busy)} onMouseEnter={() => { if (refinementTarget) selectionLoader.prefetch(refinementTarget.id); }} onFocus={() => { if (refinementTarget) selectionLoader.prefetch(refinementTarget.id); }} onClick={() => { detachJob(); setSelectionAsset(refinementTarget); }} type="button"><Brush size={16} />选区修边</button>}{resultAsset && <button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button>}</div>
+            <div className="user-canvas-actions">{refinementTarget && ["original", "result"].includes(refinementTarget.kind) && <><button className="user-secondary compact" disabled={Boolean(busy)} onClick={() => { detachJob(); setEditAsset(refinementTarget); }} type="button"><Brush size={16} />基础编辑</button><button className="user-secondary compact" disabled={Boolean(busy)} onClick={() => { detachJob(); setCropAsset(refinementTarget); }} type="button"><Crop size={16} />裁切</button></>}{canRefine && <button className="user-secondary compact" disabled={Boolean(busy)} onMouseEnter={() => { if (refinementTarget) selectionLoader.prefetch(refinementTarget.id); }} onFocus={() => { if (refinementTarget) selectionLoader.prefetch(refinementTarget.id); }} onClick={() => { detachJob(); setSelectionAsset(refinementTarget); }} type="button"><Brush size={16} />选区修边</button>}{resultAsset && <button className="user-primary compact" onClick={() => void downloadAsset(resultAsset.id).catch((reason) => setError(messageOf(reason)))} type="button"><Download size={16} />下载</button>}</div>
           </header>
           <ComparisonPreview key={`${sourceId}:${resultAsset?.id}:${operationCode}`} compare={compareSource} source={source ? { asset: source, url: sourceUrl } : null} result={resultAsset ? { asset: resultAsset, url: resultUrl } : null}
             backgroundClass={`preview-${previewMode}`} backgroundStyle={previewStyle}
@@ -1231,7 +1234,7 @@ function StudioPage({
           <div className="studio-output-settings" role="group" aria-label="处理设置">
           {operationCode === "ai.ecommerce" && <><div className="studio-settings-pair"><label className="user-field"><span>电商平台</span><select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}><option value="amazon">Amazon</option><option value="etsy">Etsy</option><option value="shopify">Shopify</option><option value="taobao">淘宝 / 天猫</option><option value="jd">京东</option><option value="douyin">抖音电商</option></select></label><label className="user-field"><span>套图张数</span><select value={form.imageCount} onChange={(event) => setForm({ ...form, imageCount: Number(event.target.value) })}>{Array.from({ length: 8 }, (_, i) => <option value={i + 1} key={i}>{i === 0 ? "1 张 · 仅主图" : `${i + 1} 张套图`}</option>)}</select></label></div><EcommerceShotPlan plan={selectedOperation?.ecommerce_plan} count={form.imageCount} /></>}
           {operationCode === "ai.extract_print" && <div className="studio-settings-pair">
-            <Segmented label="输出背景" hint="透明模式去除背景；不透明模式保留自动识别的原产品颜色作为平整背景。" value={form.printOutputMode} options={[["transparent", "透明背景"], ["opaque", "不透明"]]} onChange={(value) => {
+            <Segmented label="输出背景" hint="透明模式清除外围及内部镂空的底色；不透明模式保留原产品颜色作为平整背景。与底色完全同色的油墨若被误选，可在选区修边中切换“保留”恢复。" value={form.printOutputMode} options={[["transparent", "透明背景"], ["opaque", "不透明"]]} onChange={(value) => {
               const mode = value === "opaque" ? "opaque" : "transparent";
               setForm({ ...form, printOutputMode: mode }); setQuote(null);
               void api.updatePreferences({ studio_layout: { print_output_mode: mode } }).then(({ preferences }) => onBootstrap({ ...bootstrapRef.current, preferences })).catch(() => undefined);
@@ -1265,6 +1268,11 @@ function StudioPage({
         setAssetPicker(null);
       }} />}
       {cropAsset && <CropEditor asset={cropAsset} previewUrl={cropAsset.id === resultAsset?.id ? resultUrl : sourceUrl} onClose={() => setCropAsset(null)} onSaved={(saved) => { setCropAsset(null); chooseSource(saved); if (isGeneration) changeReferences([saved.id, ...referenceIds.filter((id) => id !== cropAsset.id)].slice(0, 6)); setResultAsset(saved); setError(""); setNotice("裁切已保存为新版本，未扣积分。"); }} />}
+      {editAsset && <RasterEditorDialog key={editAsset.id} asset={editAsset} previewUrl={editAsset.id === resultAsset?.id ? resultUrl : sourceUrl} onClose={() => setEditAsset(null)} onSaved={(saved) => {
+        setEditAsset(null); detachJob(); setBatchResults([]); setResultAsset(saved);
+        setAssets((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+        setQuote(null); setError(""); setNotice("基础编辑已保存为新版本，未扣积分。可继续编辑或下载 PNG。");
+      }} />}
       {selectionAsset && <BackgroundSelectionEditor key={selectionAsset.id} asset={selectionAsset} loader={selectionLoader} previewUrl={selectionAsset.id === resultAsset?.id ? resultUrl : sourceUrl} onClose={() => setSelectionAsset(null)} onSaved={(saved) => {
         setSelectionAsset(null); detachJob(); setBatchResults([]); setResultAsset(saved);
         setAssets((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);

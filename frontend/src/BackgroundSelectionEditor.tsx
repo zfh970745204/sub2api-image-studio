@@ -220,7 +220,7 @@ export function BackgroundSelectionEditor({ asset, loader, previewUrl, onClose, 
   const disabled = !frame || processing || tuning || saving;
 
   return createPortal(<dialog ref={dialog} className="selection-editor" aria-labelledby="selection-editor-title" onCancel={(event) => { event.preventDefault(); close(); }}>
-    <header><div><h2 id="selection-editor-title">选区修边</h2><InfoHint label="选区修边使用说明">红色区域将被删除，切换“保留”取消误选。容差会重新计算上次点击的范围；取消“只选相连区域”可选全图同色区域。滚轮同步缩放，预览底色只影响右侧。手动修边不扣积分。</InfoHint></div><button type="button" autoFocus className="selection-close" aria-label="关闭选区修边" disabled={saving} onClick={close}>×</button></header>
+    <header><div><h2 id="selection-editor-title">选区修边</h2><InfoHint label="选区修边使用说明">红色区域将被删除，可直接点击内部镂空补选，切换“保留”取消误选。容差会重新计算上次点击的范围；取消“只选相连区域”可选全图同色区域。滚轮同步缩放，预览底色只影响右侧。手动修边不扣积分。</InfoHint></div><button type="button" autoFocus className="selection-close" aria-label="关闭选区修边" disabled={saving} onClick={close}>×</button></header>
     {context?.restore_limited && <p className="selection-warning">这张历史结果未保留去底前的印花原图。可以继续清理残留，但已丢失的像素无法恢复；重新提取后的结果支持恢复。</p>}
     <div className="selection-toolbar">
       <div className="selection-modes" role="group" aria-label="选区操作"><button type="button" aria-pressed={mode === "remove"} disabled={!frame || saving} onClick={() => setMode("remove")}>＋ 删除背景</button><button type="button" aria-pressed={mode === "restore"} disabled={!frame || saving} onClick={() => setMode("restore")}>－ 保留 / 取消误选</button></div>

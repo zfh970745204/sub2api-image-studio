@@ -53,22 +53,83 @@ def test_large_colored_print_on_white_shirt_is_not_the_product_base():
 @pytest.mark.parametrize(
     "color,ink", [("#000000", "white"), ("#FFFFFF", "black"), ("#245EAA", "white")]
 )
-def test_color_background_removed_while_enclosed_same_color_ink_is_preserved(color, ink):
+def test_exterior_and_multiple_enclosed_holes_are_cleared_without_losing_ink_islands(color, ink):
     original = Image.new("RGB", (128, 128), color)
     draw = ImageDraw.Draw(original)
     draw.rectangle((24, 24, 104, 104), fill=ink)
     draw.ellipse((48, 48, 68, 68), fill=color)
+    draw.rectangle((76, 42, 94, 76), fill=color)
+    draw.rectangle((82, 50, 88, 66), fill=ink)
+    draw.point((36, 36), fill=color)
     draw.line((12, 15, 15, 95), fill=ink, width=1)
     result, metadata = finish_print(png(original), mode="transparent", color=color)
     with Image.open(BytesIO(result)) as image:
         assert image.getpixel((1, 1))[3] == 0
-        assert image.getpixel((58, 58))[3] == 255
+        assert image.getpixel((58, 58))[3] == 0
+        assert image.getpixel((78, 58))[3] == 0
+        assert image.getpixel((36, 36))[3] == 0
+        assert image.getpixel((85, 58))[3] == 255
         assert image.getpixel((14, 70))[3] == 255
         composite = Image.alpha_composite(Image.new("RGBA", image.size, color), image).convert(
             "RGB"
         )
         np.testing.assert_array_equal(np.array(composite), np.array(original))
-    assert metadata["method"] == "connected-product-color"
+    assert metadata["method"] == "product-color-regions"
+    assert metadata["background_scope"] == "exterior-and-enclosed"
+    assert metadata["enclosed_background_regions"] == 3
+
+
+@pytest.mark.parametrize(
+    "color,ink,detail",
+    [
+        ("#000000", "white", "#0A0A0A"),
+        ("#FFFFFF", "black", "#F5F5F5"),
+        ("#245EAA", "white", "#2E68B4"),
+    ],
+)
+def test_enclosed_near_color_ink_without_a_background_core_is_preserved(color, ink, detail):
+    original = Image.new("RGB", (128, 128), color)
+    draw = ImageDraw.Draw(original)
+    draw.rectangle((24, 24, 104, 104), fill=ink)
+    draw.ellipse((48, 48, 68, 68), fill=detail)
+    result, metadata = finish_print(png(original), mode="transparent", color=color)
+    with Image.open(BytesIO(result)) as image:
+        assert image.getpixel((58, 58)) == (*original.getpixel((58, 58)), 255)
+        assert image.getpixel((1, 1))[3] == 0
+    assert metadata["enclosed_background_regions"] == 0
+
+
+@pytest.mark.parametrize("color,ink", [("#000000", "white"), ("#FFFFFF", "black")])
+def test_internal_hole_soft_edges_are_cleaned_like_the_exterior(color, ink):
+    original = Image.new("RGB", (128, 128), color)
+    draw = ImageDraw.Draw(original)
+    draw.rectangle((20, 20, 108, 108), fill=ink)
+    background = 0 if color == "#000000" else 255
+    for inset, fraction in [(42, 0.075), (43, 0.055), (44, 0.04), (45, 0.025), (46, 0)]:
+        value = round(background * (1 - fraction) + (255 - background) * fraction)
+        draw.rectangle((inset, inset, 128 - inset, 128 - inset), fill=(value,) * 3)
+    result, _ = finish_print(png(original), mode="transparent", color=color)
+    with Image.open(BytesIO(result)) as image:
+        assert image.getpixel((64, 64))[3] == 0
+        assert 0 < image.getpixel((43, 64))[3] < 255
+        assert image.getpixel((40, 64))[3] == 255
+        composite = Image.alpha_composite(Image.new("RGBA", image.size, color), image)
+        assert (
+            np.max(np.abs(np.array(composite.convert("RGB")).astype(int) - np.array(original))) <= 1
+        )
+
+
+@pytest.mark.parametrize("color", ["#000000", "#FFFFFF", "#245EAA"])
+def test_opaque_output_retains_background_inside_holes(color):
+    original = Image.new("RGB", (128, 128), color)
+    draw = ImageDraw.Draw(original)
+    draw.rectangle((24, 24, 104, 104), fill="#CC5035")
+    draw.ellipse((48, 48, 68, 68), fill=color)
+    result, metadata = finish_print(png(original), mode="opaque", color=color)
+    with Image.open(BytesIO(result)) as image:
+        assert image.mode == "RGB"
+        np.testing.assert_array_equal(np.array(image), np.array(original))
+    assert metadata["transparent_background"] is False
 
 
 @pytest.mark.parametrize("background", [0, 255])
@@ -92,6 +153,9 @@ def test_native_alpha_is_preserved_or_composited_to_opaque_black():
     image = Image.new("RGBA", (128, 128))
     draw = ImageDraw.Draw(image)
     draw.rectangle((30, 30, 90, 90), fill=(255, 255, 255, 255))
+    draw.ellipse((40, 40, 54, 54), fill=(0, 0, 0, 0))
+    # Native alpha distinguishes black ink from a hole even on a black product.
+    draw.ellipse((62, 40, 76, 54), fill=(0, 0, 0, 255))
     draw.line((29, 30, 29, 90), fill=(20, 180, 40, 110))
     raw = png(image)
     transparent, _ = finish_print(raw, mode="transparent", color="#000000")
