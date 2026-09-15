@@ -27,6 +27,7 @@ from app.services.asset_files import AssetInputError, prepare_asset
 from app.services.assets import AssetService, asset_page_statement
 from app.services.configuration import runtime_config_value
 from app.services.memberships import EntitlementService
+from app.services.raster_project import validate_raster_project
 
 router = APIRouter(tags=["assets"])
 service = AssetService()
@@ -509,12 +510,36 @@ async def save_raster_edit(
     request: Request,
     principal: AssetWriter,
     image: Annotated[UploadFile, File()],
+    project: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, Any]:
-    return await _save_raster_result(asset_id, request, principal, image, basic_edit=True)
+    return await _save_raster_result(
+        asset_id, request, principal, image, basic_edit=True, project=project
+    )
+
+
+@router.get("/api/v1/assets/{asset_id}/edit/project")
+async def get_raster_project(asset_id: uuid.UUID, request: Request, principal: AssetReader):
+    async with request.app.state.runtime_services.database.session_factory() as session:
+        asset = await service.require_usable(session, asset_id, owner_id=principal.user_id)
+        if not asset.asset_metadata.get("raster_project_ready"):
+            raise ApiError(404, "RASTER_PROJECT_NOT_FOUND", "该版本没有保存的图层")
+    try:
+        raw = await _storage(request).get_object(service.raster_project_key(asset.object_key))
+    except ObjectStorageError as exc:
+        raise ApiError(503, "OBJECT_STORAGE_UNAVAILABLE", "图层读取失败，请重试") from exc
+    return Response(
+        raw, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store"}
+    )
 
 
 async def _save_raster_result(
-    asset_id: uuid.UUID, request: Request, principal, image: UploadFile, *, basic_edit: bool
+    asset_id: uuid.UUID,
+    request: Request,
+    principal,
+    image: UploadFile,
+    *,
+    basic_edit: bool,
+    project: UploadFile | None = None,
 ) -> dict[str, Any]:
     database = request.app.state.runtime_services.database
     async with database.session_factory() as session:
@@ -555,11 +580,26 @@ async def _save_raster_result(
     raw = await image.read(max_mb * 1024 * 1024 + 1)
     if len(raw) > max_mb * 1024 * 1024:
         raise ApiError(413, "ASSET_TOO_LARGE", f"文件超过 {max_mb} MB 上传限制")
+    project_raw = None
+    if project is not None:
+        limit = min(max_mb * 1024 * 1024, 128 * 1024 * 1024)
+        project_raw = await project.read(limit + 1)
+        if len(project_raw) + len(raw) > limit:
+            raise ApiError(
+                413, "ASSET_TOO_LARGE", f"图片与图层合计超过 {max_mb} MB，请减少图层或缩小图片"
+            )
     storage = _storage(request)
     try:
         prepared = await asyncio.to_thread(
             _validate_selection_result, raw, base.width, base.height, max_mp
         )
+        if project_raw is not None:
+            assert base.width is not None and base.height is not None
+            project_raw, prepared = await asyncio.to_thread(
+                validate_raster_project, project_raw, base.width, base.height, max_mp
+            )
+            if len(project_raw) + len(prepared.data) > min(max_mb, 128) * 1024 * 1024:
+                raise AssetInputError("规范化后的图片与图层超过上传限制，请减少图层")
         source_raw = await storage.get_object(source_key)
         source = await asyncio.to_thread(
             prepare_asset, source_raw, kind="original", max_megapixels=16
@@ -572,6 +612,7 @@ async def _save_raster_result(
             owner_id=principal.user_id,
             prepared=prepared,
             edit_source=source,
+            raster_project=project_raw,
             kind="result",
             operation_code="image.edit" if basic_edit else "cutout.refine",
             parent_asset_id=base.id,
@@ -919,6 +960,9 @@ async def force_delete_admin_asset(
                 )
             ).one()
             await storage.delete_object(asset.object_key)
+            await storage.delete_object(service.thumbnail_key(asset.object_key))
+            await storage.delete_object(service.edit_source_key(asset.object_key))
+            await storage.delete_object(service.raster_project_key(asset.object_key))
             queue.status = "completed"
             queue.attempts += 1
             queue.last_error = None

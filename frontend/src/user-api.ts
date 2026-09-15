@@ -348,9 +348,10 @@ export const api = {
     body.append("image", image, "selection-refined.png");
     return request<{ asset: Asset }>(`/api/v1/assets/${id}/selection`, { method: "POST", body });
   },
-  saveRasterEdit: (id: string, image: Blob) => {
+  saveRasterEdit: (id: string, image: Blob, project?: Blob) => {
     const body = new FormData();
     body.append("image", image, "image-edited.png");
+    if (project) body.append("project", project, "layers.raster");
     return request<{ asset: Asset }>(`/api/v1/assets/${id}/edit`, { method: "POST", body });
   },
   printBackground: (id: string, point?: { x: number; y: number }) =>

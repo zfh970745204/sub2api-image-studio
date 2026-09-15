@@ -17,7 +17,7 @@
 .raster-topbar > div { flex-wrap: wrap; }
 .raster-topbar label { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
 .raster-editor input { accent-color: var(--studio-accent); }
-.raster-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: 78px minmax(0, 1fr) 226px; gap: 14px; }
+.raster-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: 78px minmax(0, 1fr) 278px; gap: 14px; }
 .raster-tools { display: flex; flex-direction: column; gap: 4px; padding: 8px; overflow: auto; border: 1px solid var(--studio-line); border-radius: var(--studio-panel-radius); background: var(--studio-surface); }
 .raster-tools button { flex-direction: column; flex-shrink: 0; padding: 4px 2px; border-color: transparent; background: transparent; min-height: 44px; gap: 2px; }
 .raster-tools button span { font-size: 10px; line-height: 12px; white-space: nowrap; }
@@ -34,6 +34,28 @@
 .raster-status select { padding: 5px 8px; }
 .raster-settings { display: flex; flex-direction: column; gap: 12px; min-width: 0; overflow: auto; }
 .raster-settings section { padding: 12px; border: 1px solid var(--studio-line); border-radius: var(--studio-panel-radius); }
+.raster-settings [role=tabpanel]:not([hidden]) { display: flex; flex-direction: column; gap: 12px; }
+.raster-settings [hidden] { display: none; }
+.raster-panel-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--studio-surface); border-radius: var(--studio-control-radius); }
+.raster-panel-tabs button { border-color: transparent; background: transparent; }
+.raster-panel-tabs button[aria-selected=true] { background: var(--studio-paper); color: var(--studio-accent); box-shadow: 0 1px 4px #18243412; }
+.raster-active-layer { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--studio-muted); }
+.raster-active-layer span { flex-shrink: 0; }.raster-active-layer button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; padding: 5px 8px; max-width: 195px; font-size: 11px; }
+.raster-layer-actions { display: grid; grid-template-columns: 1fr 34px 34px; gap: 6px; margin: 12px 0; }.raster-layer-actions button { padding: 7px; }
+.raster-layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 225px; min-height: 120px; overflow: auto; margin-bottom: 14px; }
+.raster-layer-row { display: flex; align-items: center; border: 1px solid var(--studio-line); border-radius: var(--studio-control-radius); padding: 3px; gap: 2px; }
+.raster-layer-row.active { border-color: var(--studio-accent); background: var(--studio-accent-soft); }
+.raster-layer-row button { border: 0; background: transparent; padding: 6px; }.raster-layer-eye { flex-shrink: 0; }
+.raster-layer-select { flex: 1; justify-content: flex-start !important; min-width: 0; text-align: left; }
+.raster-layer-select[aria-pressed=true] { background: transparent !important; }
+.raster-layer-select > span:not(.raster-layer-symbol) { flex: 1; min-width: 0; }.raster-layer-select strong { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raster-layer-select small { display: block; margin-top: 4px; color: var(--studio-muted); font-size: 10px; }.hidden-layer .raster-layer-symbol { opacity: .4; }
+.raster-layer-symbol { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 4px; background: var(--studio-surface); color: var(--studio-muted); }
+.raster-layer-bottom { display: grid; grid-template-columns: 30px 30px 30px 1fr; gap: 5px; margin-top: 12px; }.raster-layer-bottom button { padding: 7px 3px; }
+.raster-layers-panel h3 span { color: var(--studio-muted); font-weight: 400; font-size: 11px; margin-left: 4px; }
+.raster-layers-panel input:not([type=range]) { border: 1px solid var(--studio-line); background: var(--studio-paper); color: var(--studio-ink); border-radius: var(--studio-control-radius); padding: 8px; }
+.raster-settings .raster-layer-name { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 8px; }
+.raster-content-option { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .raster-settings h3 { margin: 0 0 10px; font-size: 13px; }
 .raster-tool-heading { display: flex; align-items: center; justify-content: space-between; }.raster-tool-heading h3 { margin: 0; }
 .raster-settings p { font-size: 12px; line-height: 1.65; margin: 0 0 12px; color: var(--studio-muted); }
@@ -50,5 +72,6 @@
 .raster-editor .raster-save { padding: 11px 22px; font-size: 14px; color: white; background: var(--studio-accent); border-color: var(--studio-accent); }.raster-editor .raster-save:hover:not(:disabled) { background: var(--studio-accent-hover); }
 .raster-error, .raster-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin-top: 12px; border-radius: var(--studio-control-radius); font-size: 12px; }
 .raster-error { color: var(--studio-red); background: var(--studio-red-soft); }.raster-confirm { color: var(--studio-amber); background: var(--studio-amber-soft); }
-@media (max-width: 960px) { .raster-editor { display: block; height: auto; overflow: auto; }.raster-layout { grid-template-columns: 64px minmax(0, 1fr); }.raster-settings { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; }.raster-viewport { height: 46dvh; min-height: 340px; }.raster-tools { padding: 5px; } }
+@media (max-width: 960px) { .raster-editor { display: block; height: auto; overflow: auto; }.raster-layout { grid-template-columns: 64px minmax(0, 1fr); }.raster-settings { grid-column: 1 / -1; overflow: visible; }.raster-settings #raster-tool-panel:not([hidden]) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }.raster-viewport { height: 46dvh; min-height: 340px; }.raster-tools { padding: 5px; } }
 @media (max-width: 600px) { .raster-editor { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); padding: 12px; }.raster-layout { display: flex; flex-direction: column; gap: 10px; }.raster-tools { display: grid; grid-template-columns: repeat(4, 1fr); }.raster-tools button { flex-direction: row; min-height: 38px; }.raster-tools button span { font-size: 9px; }.raster-tools button svg { width: 16px; }.raster-settings { grid-template-columns: 1fr; }.raster-settings section { padding: 12px; }.raster-viewport { height: 42dvh; min-height: 280px; }.raster-editor footer { align-items: stretch; flex-direction: column; }.raster-topbar { gap: 10px; } }
+@media (max-width: 600px) { .raster-settings #raster-tool-panel:not([hidden]) { display: flex; }.raster-tools { grid-template-columns: repeat(3, 1fr); } }
