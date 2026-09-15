@@ -78,12 +78,14 @@ async def test_openlux_generation_format_and_edit_multipart():
     body = json.loads(requests[0].content)
     assert requests[0].url.path == "/v1/images/generations"
     assert body["format"] == "png" and "output_format" not in body
+    assert "response_format" not in body
     await service.edit(image_png=png(), reference_images=[png()], mask_png=png(), **ARGS)
     request = requests[1]
     assert request.url.path == "/v1/images/edits"
     assert request.content.count(b'name="image[]"') == 2
     assert b'name="mask"' in request.content
     assert b'name="format"' not in request.content
+    assert b'name="response_format"' not in request.content
 
 
 @pytest.mark.asyncio
@@ -436,6 +438,40 @@ async def test_connection_probe_does_not_generate_or_claim_auth_verified():
     message = await client("seedream", "doubao-seedream-4-5-251128", handler).check_connection()
     assert all(request.method == "GET" for request in requests)
     assert "未验证密钥" in message
+
+
+@pytest.mark.asyncio
+async def test_connection_probe_requires_configured_model_to_be_visible():
+    def handler(_request):
+        return httpx.Response(200, json={"data": [{"id": "gpt-image-1"}]})
+
+    with pytest.raises(ImageServiceError, match="配置模型 gpt-image-2"):
+        await client("openlux", handler=handler).check_connection()
+
+
+@pytest.mark.asyncio
+async def test_openlux_connection_probe_reports_model_visibility_without_claiming_generation():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"id": "gpt-image-2"}]})
+
+    message = await client("openlux", handler=handler).check_connection()
+    assert len(requests) == 1 and requests[0].method == "GET"
+    assert "gpt-image-2 可见" in message
+    assert "未执行收费生图或编辑" in message
+
+
+@pytest.mark.asyncio
+async def test_post_disconnect_is_clear_and_never_retryable():
+    def handler(request):
+        raise httpx.RemoteProtocolError("peer disconnected", request=request)
+
+    with pytest.raises(ImageServiceError, match="未自动重试") as error:
+        await client("openlux", handler=handler).generate(**ARGS)
+    assert error.value.retryable is False
+    assert "RemoteProtocolError" not in str(error.value)
 
 
 @pytest.mark.asyncio

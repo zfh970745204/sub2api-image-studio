@@ -196,7 +196,7 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
     setProfileResults((current) => ({ ...current, [profileId]: "" }));
     try {
       const result = await apiRequest<{ status: string; message: string; latency_ms: number }>(`/api/v1/admin/config/${code}/test-profile`, { method: "POST", body: JSON.stringify({ profile_id: profileId }) });
-      setProfileResults((current) => ({ ...current, [profileId]: `${result.status === "succeeded" ? "连接正常" : "连接失败"} · ${result.latency_ms} ms · ${result.message}` }));
+      setProfileResults((current) => ({ ...current, [profileId]: `${result.status === "succeeded" ? "认证与模型可见" : "验证失败"} · ${result.latency_ms} ms · ${result.message}` }));
     } catch (caught) {
       setProfileResults((current) => ({ ...current, [profileId]: caught instanceof Error ? caught.message : "连接测试失败" }));
     } finally { setProfileTesting(""); }
@@ -214,7 +214,7 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
     if (code === "branding") window.dispatchEvent(new Event("site-branding-updated"));
     onSaved("配置已保存并生效");
   }}>
-    <p className="admin-editor-note">填写配置后点击“保存并生效”。密钥留空保留原值，保存后可测试连接。</p>
+    <p className="admin-editor-note">{code === "sub2api" ? "填写配置后点击“保存并生效”。线路验证只检查认证和模型可见性，不会执行收费生图或编辑。" : "填写配置后点击“保存并生效”。密钥留空保留原值，保存后可测试连接。"}</p>
     {code === "general" && <p className="admin-editor-note">公开注册必须先通过邮箱验证码验证。请在“邮件服务”配置发信渠道；验证成功后获得普通用户权限、默认会员和赠送积分。邮件自助找回暂未开放。</p>}
     {code === "sub2api" && profiles.length > 0 ? <>
       <Field field={CONFIG_FIELDS.sub2api[0]} value={values.enabled} onChange={(value) => setValues({ ...values, enabled: value })} />
@@ -234,7 +234,7 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
             </div>
             <ImageApiFields values={profile} onChange={(patch) => updateProfiles(profiles.map((item, current) => current === index ? { ...item, ...patch } : item))} />
             <Field field={{ key: `api_key_${profileId}`, label: "API Key", type: "password", hint: stored.has_value ? `已设置（末尾 ${stored.last_four}），留空保留` : "尚未设置" }} value={secrets[`api_key_${profileId}`]} onChange={(value) => setSecrets({ ...secrets, [`api_key_${profileId}`]: value })} />
-            <div className="admin-profile-actions"><button className="admin-secondary-button compact" type="button" disabled={Boolean(profileTesting) || !row.active_version || dirty} onClick={() => void testProfile(profileId)}><FlaskConical size={14} />{profileTesting === profileId ? "测试中…" : "测试连接"}</button>{result && <ToastMessage tone={result.startsWith("连接正常") ? "success" : "error"}>{result}</ToastMessage>}</div>
+            <div className="admin-profile-actions"><button className="admin-secondary-button compact" type="button" disabled={Boolean(profileTesting) || !row.active_version || dirty} onClick={() => void testProfile(profileId)}><FlaskConical size={14} />{profileTesting === profileId ? "验证中…" : "验证认证与模型"}</button>{result && <ToastMessage tone={result.startsWith("认证与模型可见") ? "success" : "error"}>{result}</ToastMessage>}</div>
           </article>;
         })}</div>
       </section>

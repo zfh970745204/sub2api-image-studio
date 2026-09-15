@@ -47,6 +47,13 @@ describe("administrator configuration workflows", () => {
     expect(screen.getByLabelText(/接口地址/)).toHaveValue("https://ark.cn-beijing.volces.com/api/v3");
   });
 
+  it("labels the image route probe as authentication and model validation", () => {
+    const profile = { provider: "openlux", auth_mode: "bearer", id: "primary", name: "OpenLux", enabled: true, priority: 1, base_url: "https://api.openlux.ai/v1", image_model: "gpt-image-2", timeout_seconds: 180 };
+    render(<AdminEditor kind="settings" row={{ ...configRow, active_version: 3, active: { values: { ...defaults, enabled: true, profiles: [profile] }, secrets: { api_key_primary: { has_value: true, last_four: "test" } } } }} permissions={permissions} onClose={vi.fn()} onSaved={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "验证认证与模型" })).toBeInTheDocument();
+    expect(screen.getByText(/不会执行收费生图或编辑/)).toBeInTheDocument();
+  });
+
   it("saves the registration switch directly with the configured defaults", async () => {
     const fetchMock = mockAdmin([]);
     vi.stubGlobal("fetch", fetchMock);

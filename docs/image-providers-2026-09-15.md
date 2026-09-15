@@ -7,7 +7,7 @@
 | 后台选项 / provider | 基础地址示例 | 生成及编辑能力 |
 | --- | --- | --- |
 | OpenAI / Sub2API 兼容 · `openai` | `https://api.openai.com/v1` 或自己的兼容网关 | GPT Image 文生图、多图编辑、透明遮罩重绘；DALL·E 3 文生图；DALL·E 2 方图和单图编辑 |
-| OpenLux GPT Image · `openlux` | `https://api.openlux.ai/v1` | GPT Image 生图使用文档的 `format` 字段，编辑走 multipart `/images/edits` |
+| OpenLux GPT Image · `openlux` | `https://api.openlux.ai/v1` | GPT Image 生图只发送文档示例中的 `format` 字段（不发送会导致请求卡住的 `response_format`），编辑走 multipart `/images/edits` |
 | Gemini / Nano Banana · `gemini` | `https://generativelanguage.googleapis.com/v1beta` | `generateContent` 文生图及多参考图；2.5 系列最多 3 图，3 系列最多 14 图；无透明遮罩参数 |
 | 即梦 / 豆包 · `seedream` | `https://ark.cn-beijing.volces.com/api/v3` | Seedream 4 / 4.5 文生图及多图编辑，同走 JSON `/images/generations`；可用模型 ID 或推理接入点 ID |
 | 硅基流动 · `siliconflow` | `https://api.siliconflow.cn/v1` | 文生图使用 `image_size`；Qwen-Image-Edit 使用 `image`，2509 支持 `image2` / `image3`；图片 URL 返回 |
@@ -23,7 +23,7 @@
 2. 根据账户已开通的服务调整模型和基础地址。地址只保留 API 前缀，不包含具体操作路径、查询参数或密钥。
 3. 输入该服务的 API Key，保存并生效。留空会保留该线路已有密钥，因此更换服务商时应同时更换密钥。
 4. 使用“启用多线路配置”添加独立线路和优先级。文生图专用模型与编辑专用模型应分别配置。
-5. 保存后测试连接。测试不会生成图片，也不会消耗生图额度。模型列表或账户接口可验证认证；没有统一查询接口的协议仅检查接口可达，并明确提示不能据此判断密钥、模型权限和生成效果。
+5. 保存后测试连接。测试不会生成图片，也不会消耗生图额度。能查询模型列表的协议会同时确认当前配置模型对该密钥可见；这仍不等于收费生图或编辑链路可用。没有统一查询接口的协议仅检查接口可达，并明确提示不能据此判断密钥、模型权限和生成效果。
 
 每条线路选择 `auto` 鉴权时：Gemini 用 `x-goog-api-key`，BFL 用 `x-key`，其余用 `Authorization: Bearer ...`。需要中转时可以显式改为 Bearer。
 
@@ -38,6 +38,8 @@
 Gemini、Seedream 的后台选项提供“使用 OpenLux 中转”按钮。模型示例必须以账户当前可用列表为准，不保证所有地区或中转平台已开通。
 
 OpenLux 的千问编辑示例要求公开的 `image` URL，其他 fal / Replicate 模型也有自己的请求结构；不应选择 GPT Image 协议来调用。当前千问可通过原生百炼或硅基流动线路使用。
+
+OpenLux 的 GPT Image 文生图虽然在参数表中列出 `response_format`，但其 `gpt-image-2` 示例只发送 `format`。真实接口测试中，额外发送 `response_format=b64_json` 会长期无响应；移除后接口正常返回 `data[0].b64_json`。因此 OpenLux 线路不会发送该字段，OpenAI 官方线路的字段行为不受影响。
 
 ## 任务行为
 

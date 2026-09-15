@@ -172,7 +172,9 @@ class ImageServiceClient:
             if self.provider == "openai":
                 payload["output_format"] = output_format
             elif not images:
-                payload.update(format=output_format, response_format="b64_json")
+                # OpenLux GPT Image hangs on response_format even though its schema lists it.
+                # Its documented request uses format and returns b64_json by default.
+                payload["format"] = output_format
         else:
             payload["response_format"] = "b64_json"
             if size != "auto":
@@ -354,8 +356,16 @@ class ImageServiceClient:
             )
             return "账户认证接口可用；具体模型权限和生图效果需实际任务验证"
         if self.provider in {"openai", "openlux", "gemini", "siliconflow"}:
-            await self.list_models()
-            return "认证与模型列表接口可用；具体模型权限和生图效果需实际任务验证"
+            models = await self.list_models()
+            if self.model not in models:
+                raise ImageServiceError(
+                    f"认证成功，但配置模型 {self.model} 不在当前密钥可见的模型列表中",
+                    retryable=False,
+                )
+            return (
+                f"认证成功，配置模型 {self.model} 可见；"
+                "未执行收费生图或编辑，实际调用能力仍需任务验证"
+            )
         path = (
             "/services/aigc/multimodal-generation/generation"
             if self.provider == "dashscope"
@@ -406,8 +416,14 @@ class ImageServiceClient:
             safe = method == "GET" or isinstance(
                 exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
             )
+            message = f"Could not reach image service: {exc.__class__.__name__}."
+            if method != "GET" and isinstance(
+                exc, (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError)
+            ):
+                message = "图片服务在生成完成前超时或断开连接；为避免重复扣费未自动重试"
             raise ImageServiceError(
-                f"Could not reach image service: {exc.__class__.__name__}.", retryable=safe
+                message,
+                retryable=safe,
             ) from exc
         if (result.is_error or result.is_redirect) and result.status_code not in (
             allowed_statuses or set()
