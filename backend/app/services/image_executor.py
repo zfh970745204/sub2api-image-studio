@@ -22,6 +22,7 @@ from app.image_ops import (
     validate_edit_mask,
     vectorize_artwork,
 )
+from app.image_provider_types import UnsupportedImageOperation
 from app.object_storage import ObjectStorage, ObjectStorageError
 from app.print_extraction import (
     extract_prompt,
@@ -342,7 +343,7 @@ class ImageJobExecutor:
             return (
                 upstream.data,
                 upstream.output_format,
-                None,
+                upstream.provider_request_id,
                 {"requested_size": size, "revised_prompt": upstream.revised_prompt},
             )
         if operation in AI_EDIT_PROMPTS:
@@ -407,7 +408,7 @@ class ImageJobExecutor:
                 return (
                     output,
                     "png",
-                    None,
+                    upstream.provider_request_id,
                     {
                         **metadata,
                         "revised_prompt": upstream.revised_prompt,
@@ -418,7 +419,7 @@ class ImageJobExecutor:
             return (
                 upstream.data,
                 upstream.output_format,
-                None,
+                upstream.provider_request_id,
                 {"revised_prompt": upstream.revised_prompt},
             )
         if operation == "cutout.smart":
@@ -488,6 +489,18 @@ class ImageJobExecutor:
         clients = await self._sub2api_clients(claim)
         parameters = claim.parameters
         count = int(parameters.get("image_count", 1))
+        # Later shots always carry references. Avoid paying for the first image
+        # with a text-only model that cannot complete a consistent product set.
+        if count > 1:
+            clients = [
+                (profile_id, client)
+                for profile_id, client in clients
+                if client.capabilities.max_images >= max(1, len(refs))
+            ]
+            if not clients:
+                raise PermanentJobError(
+                    "IMAGE_CAPABILITY_UNSUPPORTED", "生成产品套图需要支持参考图编辑的图片线路"
+                )
         platform = parameters.get("platform", "amazon")
         plan = listing_plan(count)
         anchor = None
@@ -527,7 +540,7 @@ class ImageJobExecutor:
             yield (
                 upstream.data,
                 "png",
-                None,
+                upstream.provider_request_id,
                 {
                     "platform": platform,
                     "image_index": index + 1,
@@ -538,6 +551,7 @@ class ImageJobExecutor:
                     "shot_role": shot.code,
                     "shot_label": shot.label,
                     "revised_prompt": upstream.revised_prompt,
+                    "provider_request_id": upstream.provider_request_id,
                 },
             )
 
@@ -575,14 +589,21 @@ class ImageJobExecutor:
         call: Callable[[Sub2APIClient], Awaitable[Any]],
     ) -> Any:
         last_error: RetryableJobError | None = None
+        unsupported: UnsupportedImageOperation | None = None
         for profile_id, client in clients:
             try:
                 return await self._upstream(call(client), profile_id=profile_id)
+            except UnsupportedImageOperation as exc:
+                unsupported = exc
             except RetryableJobError as exc:
                 last_error = exc
         if last_error is not None:
             raise last_error
-        raise PermanentJobError("SUB2API_NOT_CONFIGURED", "Sub2API 尚未配置")
+        if unsupported is not None:
+            raise PermanentJobError(
+                "IMAGE_CAPABILITY_UNSUPPORTED", str(unsupported)
+            ) from unsupported
+        raise PermanentJobError("SUB2API_NOT_CONFIGURED", "图片服务尚未配置")
 
     async def _upstream(self, awaitable, *, profile_id: str = "default"):
         breaker = self._breaker(profile_id)
@@ -595,7 +616,13 @@ class ImageJobExecutor:
             raise
         try:
             result = await awaitable
+        except UnsupportedImageOperation:
+            raise
         except Sub2APIError as exc:
+            if exc.retryable is False:
+                raise PermanentJobError(
+                    "IMAGE_UPSTREAM_FAILED", str(exc), provider_request_id=exc.provider_request_id
+                ) from exc
             message = str(exc).lower()
             transient = (
                 exc.status_code in {402, 408, 425, 429}
@@ -629,14 +656,14 @@ class ImageJobExecutor:
                 config = await self.config_cache.get("sub2api", claim.sub2api_config_version)
             except Exception as exc:
                 raise PermanentJobError(
-                    "SUB2API_CONFIG_UNAVAILABLE", "任务绑定的 Sub2API 配置版本不可用"
+                    "SUB2API_CONFIG_UNAVAILABLE", "任务绑定的图片服务配置版本不可用"
                 ) from exc
             adapters = sub2api_profile_settings(config)
             if not adapters:
-                raise PermanentJobError("SUB2API_NOT_CONFIGURED", "Sub2API 尚未配置")
+                raise PermanentJobError("SUB2API_NOT_CONFIGURED", "图片服务尚未配置")
             return [(adapter.profile_id, Sub2APIClient(adapter)) for adapter in adapters]
         if not self.settings.sub2api_configured:
-            raise PermanentJobError("SUB2API_NOT_CONFIGURED", "Sub2API 尚未配置")
+            raise PermanentJobError("SUB2API_NOT_CONFIGURED", "图片服务尚未配置")
         return [("default", self.sub2api)]
 
     async def _sub2api_client(self, claim: ClaimedJob) -> Sub2APIClient:

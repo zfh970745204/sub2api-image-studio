@@ -12,6 +12,7 @@ from test_assets import client_for, login, raster_bytes, seed_user, upload
 from app.config import Settings
 from app.domain.ecommerce import LISTING_SHOTS, PLAN_VERSION, listing_plan, listing_prompt
 from app.domain.jobs import ECOMMERCE_PLATFORMS
+from app.image_provider_types import ImageCapabilities
 from app.repositories.models import Asset, ImageJob, PointAccount
 from app.services.image_executor import ImageJobExecutor
 from app.services.jobs import ClaimedJob
@@ -57,6 +58,7 @@ async def test_every_shot_uses_originals_without_generated_scene_feedback(count)
         sub2api_api_key="test-key", sub2api_base_url="https://upstream.example.test/v1"
     )
     client = SimpleNamespace(
+        capabilities=ImageCapabilities(max_images=16, mask=True),
         edit=AsyncMock(
             side_effect=[UpstreamImage(f"output-{i}".encode(), "png", None) for i in range(count)]
         ),
@@ -95,6 +97,7 @@ async def test_text_only_legacy_task_anchors_every_later_shot_to_the_same_clean_
         sub2api_api_key="test-key", sub2api_base_url="https://upstream.example.test/v1"
     )
     client = SimpleNamespace(
+        capabilities=ImageCapabilities(max_images=16, mask=True),
         generate=AsyncMock(return_value=UpstreamImage(b"hero", "png", None)),
         edit=AsyncMock(return_value=UpstreamImage(b"secondary", "png", None)),
     )

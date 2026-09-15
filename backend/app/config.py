@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .image_provider_types import ImageAuth, ImageProvider
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -69,6 +71,8 @@ class Settings(BaseSettings):
     service_heartbeat_seconds: int = Field(default=30, ge=10, le=300)
 
     sub2api_base_url: str = ""
+    sub2api_provider: ImageProvider = "openai"
+    sub2api_auth_mode: ImageAuth = "auto"
     sub2api_api_key: str = Field(default="", repr=False)
     sub2api_image_model: str = "gpt-image-2"
     sub2api_timeout_seconds: float = 180.0

@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, FlaskConical, Plus, RefreshCw, Save, Trash2, X } fr
 import { apiRequest, jsonObject, objectValue, type AdminRow as Row } from "./admin-api";
 import { ToastMessage } from "./Toast";
 import { BusyDialog } from "./BusyDialog";
+import { IMAGE_PROVIDERS, imageProvider } from "./image-providers";
 
 export type EditorKind = "settings" | "pricing" | "memberships" | "points" | "roles" | "users" | "user-membership" | "user-roles";
 interface EditorProps {
@@ -69,7 +70,7 @@ const CONFIG_FIELDS: Record<string, FieldDefinition[]> = {
     { key: "home_image_url", label: "首页配图地址" },
   ],
   sub2api: [
-    { key: "enabled", label: "启用 Sub2API", type: "checkbox" },
+    { key: "enabled", label: "启用图片服务", type: "checkbox" },
     { key: "base_url", label: "接口地址", hint: "例如 https://api.example.com/v1", required: false },
     { key: "image_model", label: "图片模型" },
     { key: "timeout_seconds", label: "请求超时（秒）", type: "number", min: 1, max: 600 },
@@ -121,6 +122,8 @@ function SiteImageUpload({ label, url, onUploaded }: { label: string; url: strin
 
 function legacySub2ApiProfile(values: Row): Row {
   return {
+    provider: values.provider || "openai",
+    auth_mode: values.auth_mode || "auto",
     id: "primary",
     name: "主线路",
     enabled: Boolean(values.enabled),
@@ -129,6 +132,24 @@ function legacySub2ApiProfile(values: Row): Row {
     image_model: values.image_model || "gpt-image-2",
     timeout_seconds: values.timeout_seconds || 180,
   };
+}
+
+function ImageApiFields({ values, onChange }: { values: Row; onChange: (patch: Row) => void }) {
+  const provider = imageProvider(values.provider);
+  return <div className="admin-image-api-fields">
+    <div className="admin-editor-grid">
+      <Field field={{ key: "provider", label: "接口协议", options: IMAGE_PROVIDERS.map((item) => [item.id, item.name]) }} value={provider.id} onChange={(value) => onChange({ provider: value, auth_mode: "auto" })} />
+      <Field field={{ key: "auth_mode", label: "鉴权方式", options: [["auto", "自动（按协议）"], ["bearer", "Bearer API Key（兼容中转）"], ["x-goog-api-key", "x-goog-api-key（Gemini 原生）"], ["x-key", "x-key（FLUX 原生）"]] }} value={values.auth_mode || "auto"} onChange={(value) => onChange({ auth_mode: value })} />
+      <Field field={{ key: "base_url", label: "接口地址", required: false, hint: "填写 API 基础地址，保留 /v1、/v1beta 或 /api/v3 前缀，不包含具体操作路径。" }} value={values.base_url} onChange={(value) => onChange({ base_url: value })} />
+      <Field field={{ key: "image_model", label: "图片模型" }} value={values.image_model} onChange={(value) => onChange({ image_model: value })} />
+      <Field field={{ key: "timeout_seconds", label: "请求超时（秒）", type: "number", min: 1, max: 600 }} value={values.timeout_seconds} onChange={(value) => onChange({ timeout_seconds: value })} />
+    </div>
+    <div className="admin-profile-actions">
+      <button className="admin-secondary-button compact" type="button" onClick={() => onChange({ provider: provider.id, base_url: provider.url, image_model: provider.model, auth_mode: "auto" })}>填入接口示例</button>
+      {["gemini", "seedream"].includes(provider.id) && <button className="admin-secondary-button compact" type="button" onClick={() => onChange({ base_url: `https://api.openlux.ai/${provider.id === "gemini" ? "v1beta" : "v1"}`, image_model: provider.model, auth_mode: "bearer" })}>使用 OpenLux 中转</button>}
+    </div>
+    <p className="admin-editor-note">{provider.hint}</p>
+  </div>;
 }
 
 function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
@@ -154,7 +175,9 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
     updateProfiles(next);
   };
   const addProfile = () => {
-    const nextId = `line${profiles.length + 1}`;
+    let suffix = 1;
+    while (profiles.some((profile) => profile.id === `line${suffix}`)) suffix += 1;
+    const nextId = `line${suffix}`;
     updateProfiles([...profiles, { ...legacySub2ApiProfile(values), id: nextId, name: `备用线路 ${profiles.length}`, enabled: false, priority: profiles.length + 1, base_url: "" }]);
   };
   const removeProfile = (index: number) => {
@@ -195,22 +218,29 @@ function ConfigEditor({ row, permissions, onClose, onSaved }: EditorProps) {
     {code === "general" && <p className="admin-editor-note">公开注册必须先通过邮箱验证码验证。请在“邮件服务”配置发信渠道；验证成功后获得普通用户权限、默认会员和赠送积分。邮件自助找回暂未开放。</p>}
     {code === "sub2api" && profiles.length > 0 ? <>
       <Field field={CONFIG_FIELDS.sub2api[0]} value={values.enabled} onChange={(value) => setValues({ ...values, enabled: value })} />
-      <section className="admin-profile-section" aria-label="Sub2API线路">
-        <header><div><strong>线路池</strong><small>按优先级从小到大调用，当前线路返回额度或服务异常时自动切换下一条。</small></div><button className="admin-secondary-button compact" type="button" onClick={addProfile}><Plus size={14} />新增线路</button></header>
+      <section className="admin-profile-section" aria-label="图片服务线路">
+        <header><div><strong>图片服务线路</strong><small>按优先级选择能处理本次任务的线路。支持混用服务商；已接受的生图任务不会因查询失败而自动重复提交。</small></div><button className="admin-secondary-button compact" type="button" disabled={profiles.length >= 20} onClick={addProfile}><Plus size={14} />新增线路</button></header>
         <div className="admin-profile-list">{profiles.map((profile, index) => {
           const profileId = String(profile.id || `line${index + 1}`);
           const stored = objectValue(objectValue(active.secrets)[`api_key_${profileId}`] || (profileId === "primary" ? objectValue(active.secrets).api_key : {}));
           const result = String(profileResults[profileId] || "");
           return <article className="admin-profile-card" key={profileId}>
             <div className="admin-profile-card-head"><span><strong>{String(profile.name || profileId)}</strong><small>{profileId}</small></span><div><button className="admin-icon-button bordered" type="button" title="提高优先级" aria-label="提高优先级" disabled={index === 0} onClick={() => moveProfile(index, -1)}><ArrowUp size={14} /></button><button className="admin-icon-button bordered" type="button" title="降低优先级" aria-label="降低优先级" disabled={index === profiles.length - 1} onClick={() => moveProfile(index, 1)}><ArrowDown size={14} /></button><button className="admin-icon-button bordered danger" type="button" title="删除线路" aria-label="删除线路" disabled={profiles.length <= 1} onClick={() => removeProfile(index)}><Trash2 size={14} /></button></div></div>
-            <div className="admin-profile-grid"><Field field={{ key: "name", label: "线路名称" }} value={profile.name} onChange={(value) => updateProfile(index, "name", value)} /><Field field={{ key: "id", label: "线路 ID", hint: "保存后建议不要修改" }} value={profile.id} onChange={(value) => updateProfile(index, "id", value)} /><Field field={{ key: "priority", label: "优先级", type: "number", min: 1, max: 10000 }} value={profile.priority} onChange={(value) => updateProfile(index, "priority", value)} /><Field field={{ key: "enabled", label: "启用线路", type: "checkbox" }} value={profile.enabled} onChange={(value) => updateProfile(index, "enabled", value)} /><Field field={{ key: "base_url", label: "接口地址", hint: "例如 https://api.example.com/v1", required: false }} value={profile.base_url} onChange={(value) => updateProfile(index, "base_url", value)} /><Field field={{ key: "image_model", label: "图片模型" }} value={profile.image_model} onChange={(value) => updateProfile(index, "image_model", value)} /><Field field={{ key: "timeout_seconds", label: "请求超时（秒）", type: "number", min: 1, max: 600 }} value={profile.timeout_seconds} onChange={(value) => updateProfile(index, "timeout_seconds", value)} /><Field field={{ key: `api_key_${profileId}`, label: "API Key", type: "password", hint: stored.has_value ? `已设置（末尾 ${stored.last_four}），留空保留` : "尚未设置" }} value={secrets[`api_key_${profileId}`]} onChange={(value) => setSecrets({ ...secrets, [`api_key_${profileId}`]: value })} /></div>
+            <div className="admin-profile-grid">
+              <Field field={{ key: "name", label: "线路名称" }} value={profile.name} onChange={(value) => updateProfile(index, "name", value)} />
+              <Field field={{ key: "id", label: "线路 ID", hint: "保存后建议不要修改" }} value={profile.id} onChange={(value) => updateProfile(index, "id", value)} />
+              <Field field={{ key: "priority", label: "优先级", type: "number", min: 1, max: 10000 }} value={profile.priority} onChange={(value) => updateProfile(index, "priority", value)} />
+              <Field field={{ key: "enabled", label: "启用线路", type: "checkbox" }} value={profile.enabled} onChange={(value) => updateProfile(index, "enabled", value)} />
+            </div>
+            <ImageApiFields values={profile} onChange={(patch) => updateProfiles(profiles.map((item, current) => current === index ? { ...item, ...patch } : item))} />
+            <Field field={{ key: `api_key_${profileId}`, label: "API Key", type: "password", hint: stored.has_value ? `已设置（末尾 ${stored.last_four}），留空保留` : "尚未设置" }} value={secrets[`api_key_${profileId}`]} onChange={(value) => setSecrets({ ...secrets, [`api_key_${profileId}`]: value })} />
             <div className="admin-profile-actions"><button className="admin-secondary-button compact" type="button" disabled={Boolean(profileTesting) || !row.active_version || dirty} onClick={() => void testProfile(profileId)}><FlaskConical size={14} />{profileTesting === profileId ? "测试中…" : "测试连接"}</button>{result && <ToastMessage tone={result.startsWith("连接正常") ? "success" : "error"}>{result}</ToastMessage>}</div>
           </article>;
         })}</div>
       </section>
-    </> : code === "sub2api" ? <><Fields fields={fields} values={values} setValues={setValues} /><button className="admin-secondary-button" type="button" onClick={enableProfiles}><Plus size={14} />启用多线路配置</button><p className="admin-editor-note">当前仍使用兼容的单线路配置。启用多线路后，可配置备用接口并在额度、限流或服务故障时自动切换。</p></> : <Fields fields={fields} values={values} setValues={setValues} />}
+    </> : code === "sub2api" ? <><Field field={CONFIG_FIELDS.sub2api[0]} value={values.enabled} onChange={(value) => setValues({ ...values, enabled: value })} /><ImageApiFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} /><button className="admin-secondary-button" type="button" onClick={enableProfiles}><Plus size={14} />启用多线路配置</button><p className="admin-editor-note">可为不同模型添加独立线路，按任务能力和优先级调用。更换服务商后请填写对应密钥。</p></> : <Fields fields={fields} values={values} setValues={setValues} />}
     {code === "branding" && <div className="admin-brand-uploads">{[["logo_url", "Logo"], ["login_image_url", "登录页配图"], ["register_image_url", "注册页配图"], ["home_image_url", "首页配图"]].map(([key, label]) => <SiteImageUpload key={key} label={label} url={String(values[key] || "")} onUploaded={(url) => setValues((current) => ({ ...current, [key]: url }))} />)}</div>}
-    {(SECRET_FIELDS[code] || []).filter(([key]) => code !== "email" || key === (values.provider === "api" ? "api_key" : "password")).map(([key, label]) => {
+    {(SECRET_FIELDS[code] || []).filter(([key]) => !(code === "sub2api" && profiles.length) && (code !== "email" || key === (values.provider === "api" ? "api_key" : "password"))).map(([key, label]) => {
       const stored = objectValue(objectValue(active.secrets)[key]);
       return <Field key={key} field={{ key, label, type: "password", hint: stored.has_value ? `已设置（末尾 ${stored.last_four}），留空保留` : "尚未设置" }} value={secrets[key]} onChange={(value) => setSecrets({ ...secrets, [key]: value })} />;
     })}

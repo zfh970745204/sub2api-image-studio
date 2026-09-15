@@ -55,7 +55,7 @@ Copy `.env.example` to `.env`, replace `POSTGRES_PASSWORD`, generate independent
 and set the public HTTPS URL.
 The production stack requires TLS because session cookies are always `Secure`.
 Start the isolated production services, create the first administrator, then publish
-Sub2API and R2 configuration in the administrator console:
+image-service and R2 configuration in the administrator console:
 
 ```powershell
 docker compose up --build -d
@@ -325,8 +325,17 @@ production.
 - `POST /api/preflight`
 - `GET /api/results/{filename}`
 
-Generated and edited images are returned by Sub2API as Base64 and saved to the
-local result directory. Background removal and upscaling never leave the host.
+Image services support Base64, signed image URLs and binary responses. The legacy
+API saves results locally; queued production jobs store results in the private asset bucket.
+Background removal and upscaling never leave the host.
+
+### Image service providers
+
+Configure **系统配置 → 图片服务** to use OpenAI/Sub2API-compatible APIs, OpenLux GPT Image,
+Google Gemini, Seedream, SiliconFlow, Alibaba DashScope, BFL FLUX, or Stability AI.
+Each route has its own protocol, model, base URL and encrypted API key. Existing
+Sub2API configurations remain compatible. Gemini and Seedream include OpenLux
+relay presets. See [supported protocols, capabilities and configuration examples](docs/image-providers-2026-09-15.md).
 
 ## Security
 

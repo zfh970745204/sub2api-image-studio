@@ -113,7 +113,7 @@ async def _group_payload(request: Request, group: ConfigGroup) -> dict[str, Any]
         return {
             "id": group.id,
             "code": group.code,
-            "name": group.name,
+            "name": "图片服务" if group.code == "sub2api" else group.name,
             "defaults": service.definition(group.code).model().model_dump(mode="json"),
             "active_version": group.active_version,
             "updated_at": group.updated_at,
@@ -246,7 +246,7 @@ async def test_active_sub2api_profile(
     _principal: ConfigTester,
 ) -> dict[str, Any]:
     if group_code != "sub2api":
-        raise ApiError(404, "CONFIG_PROFILE_NOT_FOUND", "只有 Sub2API 支持线路测试")
+        raise ApiError(404, "CONFIG_PROFILE_NOT_FOUND", "只有图片服务配置支持线路测试")
     service = _service(request)
     async with _runtime(request).database.session_factory() as session:
         group = await service.group(session, group_code)
