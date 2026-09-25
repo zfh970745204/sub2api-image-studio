@@ -28,7 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.errors import ApiError
 from app.config import Settings
 from app.domain.ids import uuid7
-from app.image_provider_types import ImageAuth, ImageProvider, ImageServiceError
 from app.object_storage import ObjectStorage, build_object_storage
 from app.repositories.models import (
     ConfigGroup,
@@ -63,33 +62,11 @@ def _http_url(value: str) -> str:
     return normalized
 
 
-def _image_api_url(value: str) -> str:
-    normalized = _http_url(value)
-    parsed = urlsplit(normalized)
-    if parsed.query or parsed.fragment:
-        raise ValueError("图片 API 基础地址不能包含查询参数或锚点；密钥请填写在 API Key 中")
-    if any(
-        segment in parsed.path
-        for segment in (
-            "/images/generations",
-            "/images/edits",
-            ":generateContent",
-            "/audio/",
-            "/chat/completions",
-            "/multimodal-generation/generation",
-        )
-    ):
-        raise ValueError("请填写 API 基础地址，不包含具体生图、编辑或语音操作路径")
-    return normalized
-
-
 class StrictValues(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class Sub2APIProfile(StrictValues):
-    provider: ImageProvider = "openai"
-    auth_mode: ImageAuth = "auto"
     id: str = Field(
         default="primary", min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$"
     )
@@ -111,7 +88,7 @@ class Sub2APIProfile(StrictValues):
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, value: str) -> str:
-        return _image_api_url(value)
+        return _http_url(value)
 
     @field_validator("image_model")
     @classmethod
@@ -124,13 +101,11 @@ class Sub2APIProfile(StrictValues):
     @model_validator(mode="after")
     def require_url_when_enabled(self) -> Sub2APIProfile:
         if self.enabled and not self.base_url:
-            raise ValueError("启用图片服务线路前必须填写接口地址")
+            raise ValueError("启用 Sub2API 线路前必须填写接口地址")
         return self
 
 
 class Sub2APIValues(StrictValues):
-    provider: ImageProvider = "openai"
-    auth_mode: ImageAuth = "auto"
     enabled: bool = False
     base_url: str = Field(default="", max_length=2048)
     image_model: str = Field(default="gpt-image-2", min_length=1, max_length=200)
@@ -140,7 +115,7 @@ class Sub2APIValues(StrictValues):
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, value: str) -> str:
-        return _image_api_url(value)
+        return _http_url(value)
 
     @field_validator("image_model")
     @classmethod
@@ -157,10 +132,10 @@ class Sub2APIValues(StrictValues):
             and not self.base_url
             and not any(profile.enabled and profile.base_url for profile in self.profiles)
         ):
-            raise ValueError("启用图片服务前必须填写至少一条接口地址")
+            raise ValueError("启用 Sub2API 前必须填写至少一条接口地址")
         identifiers = [profile.id for profile in self.profiles]
         if len(identifiers) != len(set(identifiers)):
-            raise ValueError("图片服务线路 ID 不能重复")
+            raise ValueError("Sub2API 线路 ID 不能重复")
         return self
 
 
@@ -278,7 +253,7 @@ class GroupDefinition:
 
 GROUP_DEFINITIONS: dict[str, GroupDefinition] = {
     "branding": GroupDefinition("网站名称与品牌配图", BrandingValues, frozenset()),
-    "sub2api": GroupDefinition("图片服务", Sub2APIValues, frozenset({"api_key"})),
+    "sub2api": GroupDefinition("Sub2API", Sub2APIValues, frozenset({"api_key"})),
     "r2": GroupDefinition(
         "Cloudflare R2", R2Values, frozenset({"access_key_id", "secret_access_key"})
     ),
@@ -1091,13 +1066,10 @@ class ConfigConnectionTester:
                 profiles = sub2api_profile_settings(config)
                 if not profiles:
                     return self._outcome(
-                        started, False, "SUB2API_NOT_CONFIGURED", "没有可用的图片服务线路"
+                        started, False, "SUB2API_NOT_CONFIGURED", "没有可用的 Sub2API 线路"
                     )
-                messages = []
                 for profile in profiles:
-                    message = await Sub2APIClient(profile).check_connection()
-                    messages.append(f"{profile.profile_name}：{message}")
-                return self._outcome(started, True, "CONNECTED", "；".join(messages))
+                    await Sub2APIClient(profile).list_models()
             elif config.group == "r2":
                 await self._test_r2(config)
             elif config.group == "email":
@@ -1116,9 +1088,7 @@ class ConfigConnectionTester:
                 started,
                 False,
                 f"{config.group.upper()}_CONNECTION_FAILED",
-                str(exc)
-                if isinstance(exc, ImageServiceError)
-                else f"连接测试失败（{exc.__class__.__name__}）",
+                f"连接测试失败（{exc.__class__.__name__}）",
             )
         return self._outcome(started, True, "CONNECTED", "连接测试通过")
 
@@ -1139,17 +1109,15 @@ class ConfigConnectionTester:
                 return self._outcome(
                     started, False, "SUB2API_PROFILE_NOT_CONFIGURED", "线路未启用或密钥尚未设置"
                 )
-            message = await Sub2APIClient(profile).check_connection()
+            await Sub2APIClient(profile).list_models()
         except Exception as exc:  # noqa: BLE001
             return self._outcome(
                 started,
                 False,
                 "SUB2API_PROFILE_CONNECTION_FAILED",
-                str(exc)
-                if isinstance(exc, ImageServiceError)
-                else f"连接测试失败（{exc.__class__.__name__}）",
+                f"连接测试失败（{exc.__class__.__name__}）",
             )
-        return self._outcome(started, True, "CONNECTED", message)
+        return self._outcome(started, True, "CONNECTED", "连接测试通过")
 
     @staticmethod
     def queue_failed_outcome() -> TestOutcome:
@@ -1227,8 +1195,6 @@ def sub2api_settings(config: ResolvedConfig) -> SimpleNamespace:
         return profiles[0]
     return SimpleNamespace(
         profile_id="primary",
-        sub2api_provider=config.values.get("provider", "openai"),
-        sub2api_auth_mode=config.values.get("auth_mode", "auto"),
         sub2api_base_url=config.values.get("base_url", ""),
         sub2api_api_key=config.secrets.get("api_key", ""),
         sub2api_image_model=config.values.get("image_model", "gpt-image-2"),
@@ -1245,8 +1211,6 @@ def sub2api_profile_settings(config: ResolvedConfig) -> list[SimpleNamespace]:
         raw_profiles = [
             {
                 "id": "primary",
-                "provider": config.values.get("provider", "openai"),
-                "auth_mode": config.values.get("auth_mode", "auto"),
                 "name": "主线路",
                 "enabled": True,
                 "priority": 1,
@@ -1272,8 +1236,6 @@ def sub2api_profile_settings(config: ResolvedConfig) -> list[SimpleNamespace]:
         resolved.append(
             SimpleNamespace(
                 profile_id=profile_id,
-                sub2api_provider=profile.get("provider", "openai"),
-                sub2api_auth_mode=profile.get("auth_mode", "auto"),
                 profile_name=str(profile.get("name", profile_id)),
                 priority=int(profile.get("priority", 1)),
                 sub2api_base_url=str(profile["base_url"]),

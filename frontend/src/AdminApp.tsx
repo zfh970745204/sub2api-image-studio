@@ -842,7 +842,7 @@ function Dashboard() {
             </div>
             <div className="admin-panel admin-health-panel">
               <div className="admin-panel-heading"><div><h2>服务状态</h2><p>{dateTime(summary.generated_at)} 更新</p></div></div>
-              <HealthRow label="图片服务" ok={summary.sub2api.configured} detail={`${summary.sub2api.requests} 次请求 · ${percent(summary.sub2api.success_rate)}`} />
+              <HealthRow label="Sub2API" ok={summary.sub2api.configured} detail={`${summary.sub2api.requests} 次请求 · ${percent(summary.sub2api.success_rate)}`} />
               <HealthRow label="Cloudflare R2" ok={summary.system.r2_configured} detail={`${summary.storage.quarantined} 个隔离 · ${summary.storage.deletion_failures} 个删除失败`} />
               <HealthRow label="Worker" ok={(summary.system.services.worker || 0) > 0} detail={`${summary.system.services.worker || 0} 个活跃实例`} />
               <HealthRow label="Scheduler" ok={(summary.system.services.scheduler || 0) > 0} detail={`${summary.system.services.scheduler || 0} 个活跃实例`} />

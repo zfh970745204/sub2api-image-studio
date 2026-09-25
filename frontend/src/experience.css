@@ -63,11 +63,8 @@
 .admin-profile-card-head small { color: var(--admin-muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .admin-profile-card-head > div { display: flex; flex-shrink: 0; gap: 4px; }
 .admin-profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
-.admin-image-api-fields { display: grid; gap: 10px; margin-block: 12px; min-width: 0; }
-.admin-image-api-fields .admin-editor-grid { margin: 0; }
-.admin-image-api-fields .admin-editor-field:nth-child(3) { grid-column: 1 / -1; }
-.admin-image-api-fields .admin-editor-note { margin: 0; }
-.admin-profile-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 28px; }
+.admin-profile-grid .admin-editor-field:nth-child(5), .admin-profile-grid .admin-editor-field:nth-child(6), .admin-profile-grid .admin-editor-field:nth-child(8) { grid-column: 1 / -1; }
+.admin-profile-actions { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 .admin-profile-actions small { min-width: 0; color: var(--admin-muted); font-size: 10px; overflow-wrap: anywhere; }
 .admin-icon-button.danger { color: var(--admin-red); }
 .admin-icon-button.danger:disabled { color: var(--admin-muted); }

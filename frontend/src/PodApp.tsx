@@ -426,7 +426,7 @@ function PodApp() {
           )}
 
           {capabilities?.sub2api_configured === false && (tool === "generate" || tool === "ai-reconstruct") && (
-            <div className="pod-config-warning">后端尚未配置图片服务密钥</div>
+            <div className="pod-config-warning">后端尚未配置 Sub2API 密钥</div>
           )}
           {error && <div className="pod-error" role="alert">{error}</div>}
 

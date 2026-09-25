@@ -355,7 +355,7 @@ function App() {
           )}
 
           {capabilities?.sub2api_configured === false && (tool === "generate" || tool === "edit") && (
-            <div className="config-warning">后端尚未配置图片服务密钥</div>
+            <div className="config-warning">后端尚未配置 Sub2API 密钥</div>
           )}
           {error && <div className="error-message" role="alert">{error}</div>}
 

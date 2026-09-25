@@ -21,39 +21,6 @@ function mockAdmin(items: AdminRow[], allowed = [...permissions]) {
 describe("administrator configuration workflows", () => {
   beforeEach(() => window.history.replaceState({}, "", "/admin/settings"));
 
-  it("saves an OpenLux Gemini route with the correct protocol and bearer auth", async () => {
-    const fetchMock = mockAdmin([]);
-    vi.stubGlobal("fetch", fetchMock);
-    render(<AdminEditor kind="settings" row={configRow} permissions={permissions} onClose={vi.fn()} onSaved={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText("接口协议"), { target: { value: "gemini" } });
-    fireEvent.click(screen.getByRole("button", { name: "使用 OpenLux 中转" }));
-    expect(screen.getByLabelText(/接口地址/)).toHaveValue("https://api.openlux.ai/v1beta");
-    expect(screen.getByLabelText("鉴权方式")).toHaveValue("bearer");
-    expect(screen.getByLabelText("图片模型")).toHaveValue("gemini-3-pro-image-preview");
-    fireEvent.click(screen.getByRole("button", { name: "启用多线路配置" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    expect(body.values.profiles[0]).toMatchObject({ provider: "gemini", auth_mode: "bearer", base_url: "https://api.openlux.ai/v1beta" });
-    expect(body.secrets).toEqual({});
-  });
-
-  it("preserves a custom endpoint until an administrator explicitly applies a preset", () => {
-    render(<AdminEditor kind="settings" row={{ ...configRow, active: { values: { ...defaults, base_url: "https://custom.test/v1", image_model: "custom-model" } } }} permissions={permissions} onClose={vi.fn()} onSaved={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText("接口协议"), { target: { value: "seedream" } });
-    expect(screen.getByLabelText(/接口地址/)).toHaveValue("https://custom.test/v1");
-    expect(screen.getByLabelText("图片模型")).toHaveValue("custom-model");
-    fireEvent.click(screen.getByRole("button", { name: "填入接口示例" }));
-    expect(screen.getByLabelText(/接口地址/)).toHaveValue("https://ark.cn-beijing.volces.com/api/v3");
-  });
-
-  it("labels the image route probe as authentication and model validation", () => {
-    const profile = { provider: "openlux", auth_mode: "bearer", id: "primary", name: "OpenLux", enabled: true, priority: 1, base_url: "https://api.openlux.ai/v1", image_model: "gpt-image-2", timeout_seconds: 180 };
-    render(<AdminEditor kind="settings" row={{ ...configRow, active_version: 3, active: { values: { ...defaults, enabled: true, profiles: [profile] }, secrets: { api_key_primary: { has_value: true, last_four: "test" } } } }} permissions={permissions} onClose={vi.fn()} onSaved={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "验证认证与模型" })).toBeInTheDocument();
-    expect(screen.getByText(/不会执行收费生图或编辑/)).toBeInTheDocument();
-  });
-
   it("saves the registration switch directly with the configured defaults", async () => {
     const fetchMock = mockAdmin([]);
     vi.stubGlobal("fetch", fetchMock);
@@ -98,7 +65,7 @@ describe("administrator configuration workflows", () => {
     fireEvent.click(await screen.findByRole("cell", { name: "Sub2API" }));
     expect(screen.getByRole("dialog", { name: "配置 Sub2API" })).toBeInTheDocument();
     expect(screen.queryByText(/提交.*申请/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("启用图片服务"));
+    fireEvent.click(screen.getByLabelText("启用 Sub2API"));
     fireEvent.change(screen.getByLabelText(/接口地址/), { target: { value: "https://api.example.test/v1" } });
     fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "new-secret" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并生效" }));

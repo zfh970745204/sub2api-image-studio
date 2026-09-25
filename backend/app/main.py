@@ -126,11 +126,12 @@ async def capabilities() -> Capabilities:
     if not settings.legacy_sync_api_enabled:
         try:
             config = await runtime_services.config_cache.get("sub2api")
-            from app.services.configuration import sub2api_profile_settings
-
-            profiles = sub2api_profile_settings(config)
-            configured = bool(profiles)
-            model = profiles[0].sub2api_image_model if profiles else model
+            configured = bool(
+                config.values.get("enabled")
+                and config.values.get("base_url")
+                and config.secrets.get("api_key")
+            )
+            model = str(config.values.get("image_model") or model)
         except Exception:  # noqa: BLE001
             configured = settings.sub2api_configured
         try:
