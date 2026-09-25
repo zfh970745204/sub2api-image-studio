@@ -66,7 +66,7 @@ jobs:
           docker run --detach --name sub2image-minio --publish 9000:9000
           --env MINIO_ROOT_USER=integration-access-key
           --env MINIO_ROOT_PASSWORD=integration-secret-key
-          quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
       - name: Wait for MinIO
         shell: bash
         run: |
